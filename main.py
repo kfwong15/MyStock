@@ -44,7 +44,7 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0",
     "Mozilla/5.0 (iPad; CPU OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.3",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0."
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like极狐) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0"
 ]
 
 # ========== 工具函数 ==========
@@ -74,9 +74,19 @@ def generate_fake_data(symbol):
         'Volume': [random.randint(100000, 5000000) for _ in prices]
     }, index=dates)
     
-    # 转换为马来西亚时区
-    df.index = df.index.tz_localize('UTC').tz_convert(MYT)
+    # 设置时区为马来西亚时间
+    df.index = df.index.tz_localize(MYT)
     
+    return df
+
+def safe_tz_convert(df, timezone):
+    """安全地将DataFrame索引转换为指定时区"""
+    if df.index.tz is None:
+        # 如果索引没有时区信息，先本地化为UTC，再转换为目标时区
+        df.index = df.index.tz_localize('UTC').tz_convert(timezone)
+    else:
+        # 如果已有时区信息，直接转换
+        df.index = df.index.tz_convert(timezone)
     return df
 
 def fetch_data(symbol, retries=3):
@@ -119,6 +129,14 @@ def fetch_yahoo_alternative(symbol, retries=3):
             }
             
             response = requests.get(url, headers=headers, params=params, timeout=15)
+            
+            # 检查429错误（请求过多）
+            if response.status_code == 429:
+                wait_time = (2 ** attempt) + random.uniform(0, 3)  # 指数退避
+                print(f"⚠️ 429 请求过多，等待 {wait_time:.1f} 秒后重试...")
+                time.sleep(wait_time)
+                continue
+                
             response.raise_for_status()
             data = response.json()
             
@@ -139,11 +157,8 @@ def fetch_yahoo_alternative(symbol, retries=3):
             
             if not df.empty:
                 df.set_index('Date', inplace=True)
-                # 转换为马来西亚时区
-                if df.index.tz is None:
-                    df.index = df.index.tz_localize('UTC').tz_convert(MYT)
-                else:
-                    df.index = df.index.tz_convert(MYT)
+                # 安全转换时区
+                df = safe_tz_convert(df, MYT)
                 
                 # 清理数据
                 df.dropna(inplace=True)
@@ -197,11 +212,8 @@ def fetch_alpha_vantage(symbol, retries=3):
             df = df.astype(float)
             
             if not df.empty:
-                # 转换为马来西亚时区
-                if df.index.tz is None:
-                    df.index = df.index.tz_localize('UTC').tz_convert(MYT)
-                else:
-                    df.index = df.index.tz_convert(MYT)
+                # 安全转换时区
+                df = safe_tz_convert(df, MYT)
                 
                 # 按日期排序
                 df.sort_index(ascending=True, inplace=True)
@@ -236,7 +248,7 @@ def compute_indicators(df):
     avg_loss = loss.rolling(14).mean()
     
     with np.errstate(divide='ignore', invalid='ignore'):
-        rs = np.where(avg_loss != 0, avg_gain / avg_loss, np.nan)
+        rs = np.where(avg_loss != 0, avg极狐 / avg_loss, np.nan)
         df["RSI"] = np.where(~np.isnan(rs), 100 - (100 / (1 + rs)), 50)
     
     # MACD 计算
@@ -473,9 +485,15 @@ def main():
     print(f"{'='*50}\n")
     
     for symbol in STOCK_LIST:
-        msg, chart_path = analyze_stock(symbol)
-        if msg:
-            send_to_telegram(msg, chart_path)
+        try:
+            msg, chart_path = analyze_stock(symbol)
+            if msg:
+                send_to_telegram(msg, chart_path)
+        except Exception as e:
+            error_msg = f"⚠️ 分析 {symbol} 时发生严重错误: {str(e)}"
+            print(error_msg)
+            send_to_telegram(error_msg)
+            
         # 随机延迟避免请求过快
         time.sleep(5 + random.uniform(0, 5))
     
