@@ -71,7 +71,10 @@ def fetch_with_yfinance(symbol, retries=3):
             
             if not df.empty and len(df) > 10:
                 # 转换为马来西亚时区
-                df.index = df.index.tz_convert(MYT)
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize('UTC').tz_convert(MYT)
+                else:
+                    df.index = df.index.tz_convert(MYT)
                 df.dropna(inplace=True)
                 print(f"✅ [yfinance] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
                 return df
@@ -108,9 +111,9 @@ def fetch_with_backup_api(symbol):
         # 解析响应数据
         data = response.json()
         
-        # 创建DataFrame
+        # 创建DataFrame - 修复这里的语法错误
         df = pd.DataFrame({
-            'Date': pd.to_datetime(data['t'], 
+            'Date': pd.to_datetime(data['t']),  # 修复这里的括号问题
             'Open': data['o'],
             'High': data['h'],
             'Low': data['l'],
@@ -122,7 +125,10 @@ def fetch_with_backup_api(symbol):
         df.set_index('Date', inplace=True)
         
         # 转换为马来西亚时区
-        df.index = df.index.tz_localize('UTC').tz_convert(MYT)
+        if df.index.tz is None:
+            df.index = df.index.tz_localize('UTC').tz_convert(MYT)
+        else:
+            df.index = df.index.tz_convert(MYT)
         
         if not df.empty:
             print(f"✅ [备用API] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
