@@ -11,7 +11,7 @@ with open("config.json", "r") as f:
 bot_token = config["bot_token"]
 chat_id = config["chat_id"]
 
-# Telegram 发图函数
+# 发送图片到 Telegram
 def send_telegram_photo(bot_token, chat_id, photo_path, caption=""):
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
     with open(photo_path, "rb") as photo_file:
@@ -19,24 +19,24 @@ def send_telegram_photo(bot_token, chat_id, photo_path, caption=""):
         data = {"chat_id": chat_id, "caption": caption}
         response = requests.post(url, files=files, data=data)
         if response.status_code == 200:
-            print(f"✅ 已发送到 Telegram：{photo_path}")
+            print(f"✅ 已发送：{photo_path}")
         else:
             print(f"❌ 发送失败：{response.text}")
 
-# 创建图表目录
+# 创建图表文件夹
 os.makedirs("charts", exist_ok=True)
 
-# 自选股列表
+# 自选股票列表
 my_stocks = ["5255.KL", "0209.KL"]
 
 for stock in my_stocks:
     print(f"📈 抓取 {stock} 的数据...")
 
-    # 下载近5天数据用于分析
+    # 抓近5日用于涨跌分析
     df = yf.download(stock, period="5d", interval="1d", auto_adjust=False)
 
     if df.empty:
-        print(f"⚠️ 没有抓到 {stock} 的数据")
+        print(f"⚠️ 未获取到 {stock} 数据")
         continue
 
     df['MA5'] = df['Close'].rolling(window=5).mean()
@@ -44,7 +44,6 @@ for stock in my_stocks:
 
     latest = df.iloc[-1]
 
-    # 使用 .item() 修复 FutureWarning & Series 错误
     open_price = latest["Open"].item() if hasattr(latest["Open"], "item") else float(latest["Open"])
     close_price = latest["Close"].item() if hasattr(latest["Close"], "item") else float(latest["Close"])
     change = close_price - open_price
@@ -60,18 +59,22 @@ for stock in my_stocks:
         trend_icon = "➖ 无涨跌"
         reason = "今日股价稳定，缺乏波动。"
 
-    # 获取昨日 MA 值（处理空值）
+    # 获取昨日 MA 数据并安全处理
     if len(df) >= 2:
         yesterday = df.iloc[-2]
-        yesterday_MA5 = yesterday["MA5"].item() if not pd.isna(yesterday["MA5"]) else 0
-        yesterday_MA20 = yesterday["MA20"].item() if not pd.isna(yesterday["MA20"]) else 0
+        y_ma5 = yesterday["MA5"]
+        y_ma20 = yesterday["MA20"]
+        yesterday_MA5 = y_ma5.item() if hasattr(y_ma5, "item") and not pd.isna(y_ma5) else 0
+        yesterday_MA20 = y_ma20.item() if hasattr(y_ma20, "item") and not pd.isna(y_ma20) else 0
     else:
         yesterday_MA5 = yesterday_MA20 = 0
 
-    today_MA5 = latest["MA5"].item() if not pd.isna(latest["MA5"]) else 0
-    today_MA20 = latest["MA20"].item() if not pd.isna(latest["MA20"]) else 0
+    t_ma5 = latest["MA5"]
+    t_ma20 = latest["MA20"]
+    today_MA5 = t_ma5.item() if hasattr(t_ma5, "item") and not pd.isna(t_ma5) else 0
+    today_MA20 = t_ma20.item() if hasattr(t_ma20, "item") and not pd.isna(t_ma20) else 0
 
-    # 趋势提醒
+    # 趋势判断
     trend_advice = ""
     if close_price > today_MA20:
         trend_advice = "⚠️ 明日关注：当前股价已上穿 MA20，有短期上升动能。"
@@ -80,7 +83,7 @@ for stock in my_stocks:
     elif today_MA5 < today_MA20 and yesterday_MA5 > yesterday_MA20:
         trend_advice = "⚠️ 注意：出现 MA5 死叉 MA20，或有短期回调压力。"
 
-    # 抓取新闻
+    # 获取新闻
     try:
         ticker = yf.Ticker(stock)
         news_items = ticker.news[:3]
@@ -92,7 +95,7 @@ for stock in my_stocks:
     except Exception as e:
         news_text = "\n📰 未能获取相关新闻。"
 
-    # 汇总报告内容
+    # 整体文字内容
     caption = (
         f"📊 {stock} 股票走势汇报\n"
         f"开市价：RM {open_price:.3f}\n"
@@ -103,12 +106,12 @@ for stock in my_stocks:
         f"{news_text}"
     )
 
-    # 下载60日历史用于绘图
+    # 获取60日用于画图
     hist_df = yf.download(stock, period="60d", interval="1d", auto_adjust=False)
     hist_df['MA5'] = hist_df['Close'].rolling(window=5).mean()
     hist_df['MA20'] = hist_df['Close'].rolling(window=20).mean()
 
-    # 绘图
+    # 画图
     plt.figure(figsize=(12, 6))
     plt.plot(hist_df['Close'], label='收盘价', color='black')
     plt.plot(hist_df['MA5'], label='5日均线', color='blue')
@@ -124,6 +127,4 @@ for stock in my_stocks:
     plt.close()
 
     print(f"✅ 图表已生成：{filename}")
-
-    # 发到 Telegram
     send_telegram_photo(bot_token, chat_id, filename, caption=caption)
