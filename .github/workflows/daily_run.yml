@@ -2,30 +2,35 @@ name: Daily Stock Report
 
 on:
   schedule:
-    - cron: '30 1 * * *'   # 09:30 MYT
-    - cron: '40 5 * * *'   # 13:40 MYT
-    - cron: '0 11 * * *'   # 19:00 MYT
-  workflow_dispatch:       # 手动触发
+    # 马来西亚时区为 UTC+8，因此以下时间为：
+    # - 1:30AM UTC = 9:30AM MYT
+    # - 5:40AM UTC = 1:40PM MYT
+    # - 11:00AM UTC = 7:00PM MYT
+    - cron: '30 1 * * *'
+    - cron: '40 5 * * *'
+    - cron: '0 11 * * *'
+  workflow_dispatch:  # 手动触发按钮
 
 jobs:
-  run-script:
+  report:
     runs-on: ubuntu-latest
-    env:
-      TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@v3
 
-      - name: 🐍 Setup Python
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.10
+          python-version: '3.10'
 
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 🧠 Run stock report
+      - name: Run Main Script
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python main.py
