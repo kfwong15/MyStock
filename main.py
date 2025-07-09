@@ -44,11 +44,13 @@ for stock in my_stocks:
 
     latest = df.iloc[-1]
 
-    open_price = latest["Open"].item() if hasattr(latest["Open"], "item") else float(latest["Open"])
-    close_price = latest["Close"].item() if hasattr(latest["Close"], "item") else float(latest["Close"])
+    # 当日开盘/收盘价
+    open_price = float(latest["Open"])
+    close_price = float(latest["Close"])
     change = close_price - open_price
     pct_change = (change / open_price) * 100
 
+    # 涨跌说明
     if change > 0:
         trend_icon = "📈 上涨"
         reason = "可能受到市场乐观或业绩预期带动。"
@@ -64,15 +66,28 @@ for stock in my_stocks:
         yesterday = df.iloc[-2]
         y_ma5 = yesterday["MA5"]
         y_ma20 = yesterday["MA20"]
-        yesterday_MA5 = y_ma5.item() if hasattr(y_ma5, "item") and not pd.isna(y_ma5) else 0
-        yesterday_MA20 = y_ma20.item() if hasattr(y_ma20, "item") and not pd.isna(y_ma20) else 0
+        try:
+            yesterday_MA5 = float(y_ma5)
+        except:
+            yesterday_MA5 = 0.0
+        try:
+            yesterday_MA20 = float(y_ma20)
+        except:
+            yesterday_MA20 = 0.0
     else:
-        yesterday_MA5 = yesterday_MA20 = 0
+        yesterday_MA5 = yesterday_MA20 = 0.0
 
+    # 获取今日 MA 数据并安全处理
     t_ma5 = latest["MA5"]
     t_ma20 = latest["MA20"]
-    today_MA5 = t_ma5.item() if hasattr(t_ma5, "item") and not pd.isna(t_ma5) else 0
-    today_MA20 = t_ma20.item() if hasattr(t_ma20, "item") and not pd.isna(t_ma20) else 0
+    try:
+        today_MA5 = float(t_ma5)
+    except:
+        today_MA5 = 0.0
+    try:
+        today_MA20 = float(t_ma20)
+    except:
+        today_MA20 = 0.0
 
     # 趋势判断
     trend_advice = ""
@@ -83,16 +98,16 @@ for stock in my_stocks:
     elif today_MA5 < today_MA20 and yesterday_MA5 > yesterday_MA20:
         trend_advice = "⚠️ 注意：出现 MA5 死叉 MA20，或有短期回调压力。"
 
-    # 获取新闻
+    # 获取新闻标题（最多3条）
     try:
         ticker = yf.Ticker(stock)
         news_items = ticker.news[:3]
         news_text = "\n📰 今日相关新闻："
         for news in news_items:
-            title = news["title"]
+            title = news.get("title", "无标题")
             source = news.get("publisher", "来源未知")
             news_text += f"\n• [{source}] {title}"
-    except Exception as e:
+    except:
         news_text = "\n📰 未能获取相关新闻。"
 
     # 整体文字内容
@@ -106,12 +121,12 @@ for stock in my_stocks:
         f"{news_text}"
     )
 
-    # 获取60日用于画图
+    # 获取60日用于绘图
     hist_df = yf.download(stock, period="60d", interval="1d", auto_adjust=False)
     hist_df['MA5'] = hist_df['Close'].rolling(window=5).mean()
     hist_df['MA20'] = hist_df['Close'].rolling(window=20).mean()
 
-    # 画图
+    # 绘图
     plt.figure(figsize=(12, 6))
     plt.plot(hist_df['Close'], label='收盘价', color='black')
     plt.plot(hist_df['MA5'], label='5日均线', color='blue')
