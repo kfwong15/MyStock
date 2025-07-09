@@ -1,5 +1,5 @@
 yfinance
-matplotlib
 pandas
+matplotlib
 requests
-flask
+pandas_ta
