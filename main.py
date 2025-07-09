@@ -2,14 +2,11 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
-import json
 import os
 
-# 读取 Telegram 配置
-with open("config.json", "r") as f:
-    config = json.load(f)
-bot_token = config["bot_token"]
-chat_id = config["chat_id"]
+# 从环境变量获取 Telegram 配置（GitHub Secrets）
+bot_token = os.getenv("TG_BOT_TOKEN")
+chat_id = os.getenv("TG_CHAT_ID")
 
 # 发送图片到 Telegram
 def send_telegram_photo(bot_token, chat_id, photo_path, caption=""):
@@ -44,13 +41,16 @@ for stock in my_stocks:
 
     latest = df.iloc[-1]
 
-    # 开盘价与收盘价
-    open_price = float(latest["Open"])
-    close_price = float(latest["Close"])
-    change = close_price - open_price
-    pct_change = (change / open_price) * 100
+    try:
+        open_price = float(latest["Open"])
+        close_price = float(latest["Close"])
+    except Exception as e:
+        print(f"❌ 数据格式异常：{e}")
+        continue
 
-    # 涨跌说明
+    change = close_price - open_price
+    pct_change = (change / open_price) * 100 if open_price else 0
+
     if change > 0:
         trend_icon = "📈 上涨"
         reason = "可能受到市场乐观或业绩预期带动。"
@@ -61,31 +61,17 @@ for stock in my_stocks:
         trend_icon = "➖ 无涨跌"
         reason = "今日股价稳定，缺乏波动。"
 
-    # 获取昨日 MA 数据（安全转换）
+    # 昨日均线
     if len(df) >= 2:
         yesterday = df.iloc[-2]
-        try:
-            yesterday_MA5 = float(yesterday["MA5"])
-        except:
-            yesterday_MA5 = 0.0
-        try:
-            yesterday_MA20 = float(yesterday["MA20"])
-        except:
-            yesterday_MA20 = 0.0
+        yesterday_MA5 = float(yesterday["MA5"]) if pd.notna(yesterday["MA5"]) else 0.0
+        yesterday_MA20 = float(yesterday["MA20"]) if pd.notna(yesterday["MA20"]) else 0.0
     else:
         yesterday_MA5 = yesterday_MA20 = 0.0
 
-    # 获取今日 MA 数据（安全转换）
-    try:
-        today_MA5 = float(latest["MA5"])
-    except:
-        today_MA5 = 0.0
-    try:
-        today_MA20 = float(latest["MA20"])
-    except:
-        today_MA20 = 0.0
+    today_MA5 = float(latest["MA5"]) if pd.notna(latest["MA5"]) else 0.0
+    today_MA20 = float(latest["MA20"]) if pd.notna(latest["MA20"]) else 0.0
 
-    # 趋势提醒判断
     trend_advice = ""
     if close_price > today_MA20:
         trend_advice = "⚠️ 明日关注：当前股价已上穿 MA20，有短期上升动能。"
@@ -94,7 +80,7 @@ for stock in my_stocks:
     elif today_MA5 < today_MA20 and yesterday_MA5 > yesterday_MA20:
         trend_advice = "⚠️ 注意：出现 MA5 死叉 MA20，或有短期回调压力。"
 
-    # 获取新闻（处理无新闻情况）
+    # 获取新闻
     try:
         ticker = yf.Ticker(stock)
         news_items = ticker.news[:3]
@@ -106,8 +92,8 @@ for stock in my_stocks:
                 news_text += f"\n• [{source}] {title}"
         else:
             news_text = "\n📰 今日相关新闻：暂无相关新闻。"
-    except:
-        news_text = "\n📰 今日相关新闻：获取失败。"
+    except Exception as e:
+        news_text = f"\n📰 今日相关新闻：获取失败（{e}）"
 
     # 汇总文字说明
     caption = (
@@ -120,17 +106,16 @@ for stock in my_stocks:
         f"{news_text}"
     )
 
-    # 抓取历史数据用于绘图
+    # 绘制图表
     hist_df = yf.download(stock, period="60d", interval="1d", auto_adjust=False)
-    hist_df['MA5'] = hist_df['Close'].rolling(window=5).mean()
-    hist_df['MA20'] = hist_df['Close'].rolling(window=20).mean()
+    hist_df["MA5"] = hist_df["Close"].rolling(window=5).mean()
+    hist_df["MA20"] = hist_df["Close"].rolling(window=20).mean()
 
-    # 绘图
     plt.figure(figsize=(12, 6))
-    plt.plot(hist_df['Close'], label='收盘价', color='black')
-    plt.plot(hist_df['MA5'], label='5日均线', color='blue')
-    plt.plot(hist_df['MA20'], label='20日均线', color='red')
-    plt.title(f"{stock} - 近60日走势图")
+    plt.plot(hist_df["Close"], label="收盘价", color="black")
+    plt.plot(hist_df["MA5"], label="5日均线", color="blue")
+    plt.plot(hist_df["MA20"], label="20日均线", color="red")
+    plt.title(f"{stock} - 近60日走势图", fontproperties="SimHei")
     plt.xlabel("日期")
     plt.ylabel("价格 (RM)")
     plt.legend()
