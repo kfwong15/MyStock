@@ -2,14 +2,17 @@ name: Daily Stock Report
 
 on:
   schedule:
-    # 马来西亚时区 = UTC+8
-    - cron: '30 1 * * *'   # 09:30 MYT
-    - cron: '40 5 * * *'   # 13:40 MYT
-    - cron: '0 11 * * *'   # 19:00 MYT
-  workflow_dispatch:      # 手动触发按钮
+    # 马来西亚时区为 UTC+8，因此以下时间为：
+    # - 1:30AM UTC = 9:30AM MYT
+    # - 5:40AM UTC = 1:40PM MYT
+    # - 11:00AM UTC = 7:00PM MYT
+    - cron: '30 1 * * *'
+    - cron: '40 5 * * *'
+    - cron: '0 11 * * *'
+  workflow_dispatch:  # 手动触发按钮
 
 jobs:
-  stock-report:
+  report:
     runs-on: ubuntu-latest
 
     steps:
@@ -26,10 +29,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Create charts directory
-        run: mkdir -p charts
-
-      - name: Run stock analysis script
+      - name: Run Main Script
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
