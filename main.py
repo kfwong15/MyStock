@@ -13,6 +13,7 @@ import re
 import json
 import traceback
 from bs4 import BeautifulSoup
+import random
 
 # ========== 配置 ==========
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
@@ -33,107 +34,123 @@ os.makedirs(CHART_DIR, exist_ok=True)
 # 设置马来西亚时区
 MYT = pytz.timezone('Asia/Kuala_Lumpur')
 
+# 用户代理列表 - 用于轮换避免被阻止
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0"
+]
+
 # ========== 工具函数 ==========
 def fetch_data(symbol, retries=3):
-    """获取股票数据，使用Bursa Malaysia官方数据源"""
+    """获取股票数据，使用Investing.com数据源"""
     if not symbol or not re.match(r"^[0-9]{4}$", symbol):
         print(f"⚠️ 无效的股票代码: {symbol}")
         return pd.DataFrame()
     
-    # 尝试使用Bursa Malaysia API获取数据
-    df = fetch_bursa_malaysia_data(symbol, retries)
+    # 尝试使用Investing.com获取数据
+    df = fetch_investing_data(symbol, retries)
     if not df.empty:
         return df
     
     return pd.DataFrame()
 
-def fetch_bursa_malaysia_data(symbol, retries=3):
-    """使用Bursa Malaysia API获取股票数据"""
+def fetch_investing_data(symbol, retries=3):
+    """使用Investing.com获取股票数据"""
     for attempt in range(retries):
         try:
-            print(f"🔍 [Bursa Malaysia] 获取 {symbol} 数据 (尝试 {attempt+1}/{retries})...")
-            
-            # 获取股票详情
-            detail_url = f"https://www.bursamalaysia.com/market_information/equities_prices?stock_code={symbol}"
+            # 随机选择用户代理
+            user_agent = random.choice(USER_AGENTS)
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+                "User-Agent": user_agent,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Referer": "https://www.investing.com/",
+                "DNT": "1",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1"
             }
             
-            # 获取当前价格数据
-            response = requests.get(detail_url, headers=headers, timeout=15)
+            print(f"🔍 [Investing.com] 获取 {symbol} 数据 (尝试 {attempt+1}/{retries})...")
+            
+            # 第一步：搜索股票获取ID
+            search_url = f"https://www.investing.com/search/?q={symbol}&tab=stocks"
+            response = requests.get(search_url, headers=headers, timeout=15)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')
+            result_link = soup.find('a', class_='js-inner-all-results-quote-item row')
             
-            # 提取公司名称
-            company_name = soup.find('h1', class_='stock-profile').text.strip() if soup.find('h1', class_='stock-profile') else symbol
-            
-            # 提取当前价格数据
-            price_table = soup.find('table', class_='table-price')
-            if not price_table:
-                print(f"⚠️ [Bursa Malaysia] {symbol} 未找到价格表格")
+            if not result_link:
+                print(f"⚠️ [Investing.com] 未找到 {symbol} 的搜索结果")
                 continue
                 
-            rows = price_table.find_all('tr')
-            price_data = {}
-            for row in rows:
-                cols = row.find_all('td')
-                if len(cols) == 2:
-                    key = cols[0].text.strip().replace(':', '')
-                    value = cols[1].text.strip()
-                    price_data[key] = value
+            stock_url = "https://www.investing.com" + result_link['href']
+            stock_id = stock_url.split('-')[-1]
             
-            # 获取历史数据
-            history_url = f"https://www.bursamalaysia.com/market_information/equities_prices/historical_stock_prices?stock_code={symbol}"
-            response = requests.get(history_url, headers=headers, timeout=15)
+            # 第二步：获取历史数据
+            history_url = f"https://api.investing.com/api/financialdata/historical/{stock_id}?start-date={datetime.now().strftime('%Y-%m-%d')}&end-date={datetime.now().strftime('%Y-%m-%d')}&time-frame=Daily&add-missing-rows=false"
+            
+            # 添加API特定的头
+            api_headers = {
+                **headers,
+                "X-Requested-With": "XMLHttpRequest",
+                "Origin": "https://www.investing.com",
+                "Sec-Fetch-Dest": "empty",
+                "Sec-Fetch-Mode": "cors",
+                "Sec-Fetch-Site": "same-site"
+            }
+            
+            response = requests.get(history_url, headers=api_headers, timeout=15)
             response.raise_for_status()
             
-            soup = BeautifulSoup(response.text, 'html.parser')
-            history_table = soup.find('table', class_='table-price')
-            if not history_table:
-                print(f"⚠️ [Bursa Malaysia] {symbol} 未找到历史数据表格")
-                continue
-                
-            # 解析历史数据
-            history_rows = history_table.find_all('tr')[1:]  # 跳过表头
+            data = response.json()
+            
+            # 解析数据
             history_data = []
-            for row in history_rows:
-                cols = row.find_all('td')
-                if len(cols) >= 7:
-                    date_str = cols[0].text.strip()
-                    open_price = float(cols[1].text.strip().replace(',', ''))
-                    high_price = float(cols[2].text.strip().replace(',', ''))
-                    low_price = float(cols[3].text.strip().replace(',', ''))
-                    close_price = float(cols[4].text.strip().replace(',', ''))
-                    volume = int(cols[5].text.strip().replace(',', ''))
-                    
-                    history_data.append({
-                        'Date': pd.to_datetime(date_str),
-                        'Open': open_price,
-                        'High': high_price,
-                        'Low': low_price,
-                        'Close': close_price,
-                        'Volume': volume
-                    })
+            for item in data.get('data', []):
+                timestamp = item[0]  # 时间戳（毫秒）
+                date = datetime.fromtimestamp(timestamp / 1000)
+                open_price = item[1]
+                high_price = item[2]
+                low_price = item[3]
+                close_price = item[4]
+                volume = item[5]
+                
+                history_data.append({
+                    'Date': date,
+                    'Open': open_price,
+                    'High': high_price,
+                    'Low': low_price,
+                    'Close': close_price,
+                    'Volume': volume
+                })
             
             # 创建DataFrame
             df = pd.DataFrame(history_data)
             
-            # 添加公司名称作为元数据
-            df.attrs['company_name'] = company_name
-            
             if not df.empty:
                 df.set_index('Date', inplace=True)
-                print(f"✅ [Bursa Malaysia] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
+                # 转换为马来西亚时区
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize('UTC').tz_convert(MYT)
+                else:
+                    df.index = df.index.tz_convert(MYT)
+                
+                # 按日期排序
+                df.sort_index(ascending=True, inplace=True)
+                
+                print(f"✅ [Investing.com] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
                 return df
             else:
-                print(f"⚠️ [Bursa Malaysia] {symbol} 返回空数据")
+                print(f"⚠️ [Investing.com] {symbol} 返回空数据")
                 
         except Exception as e:
-            print(f"⚠️ [Bursa Malaysia] 获取 {symbol} 数据失败: {str(e)}")
+            print(f"⚠️ [Investing.com] 获取 {symbol} 数据失败: {str(e)}")
             traceback.print_exc()
-            time.sleep(2)  # 等待后重试
+            time.sleep(2 + attempt)  # 增加等待时间
     
     return pd.DataFrame()
 
@@ -192,10 +209,7 @@ def draw_chart(symbol, df):
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%m-%d', tz=MYT))
     plt.gca().xaxis.set_major_locator(mdates.AutoDateLocator())
     
-    # 获取公司名称用于标题
-    company_name = df.attrs.get('company_name', symbol)
-    
-    plt.title(f"{company_name} ({symbol}) {days}日走势", fontsize=14)
+    plt.title(f"{symbol} {days}日走势", fontsize=14)
     plt.xlabel("日期", fontsize=10)
     plt.ylabel("价格 (RM)", fontsize=10)
     plt.legend()
@@ -333,12 +347,9 @@ def analyze_stock(symbol):
             elif ma5 < ma20 and yesterday.get("MA5", 0) >= yesterday.get("MA20", 0):
                 signals.append("🔴 MA5下穿MA20 - 短期看跌")
         
-        # 获取公司名称
-        company_name = df.attrs.get('company_name', symbol)
-        
         # 构建AI提示
         prompt = (
-            f"作为专业股票分析师，请用中文简洁分析 {company_name} ({symbol})："
+            f"作为专业股票分析师，请用中文简洁分析 {symbol}："
             f"最后交易日 {last_trade_date}，开盘价 RM{open_p:.3f}，最高价 RM{high_p:.3f}，"
             f"最低价 RM{low_p:.3f}，收盘价 RM{close_p:.3f}（{trend} {abs(diff):.3f}，涨跌幅 {pct:.2f}%），"
             f"成交量 {volume:,}。"
@@ -359,7 +370,7 @@ def analyze_stock(symbol):
         
         # 构建消息
         msg = (
-            f"📊 *{company_name} ({symbol}) 股票分析报告*\n"
+            f"📊 *{symbol} 股票分析报告*\n"
             f"• 最后交易日: `{last_trade_date}`\n"
             f"• 开盘价: `RM {open_p:.3f}`\n"
             f"• 最高价: `RM {high_p:.3f}`\n"
@@ -397,7 +408,7 @@ def main():
         msg, chart_path = analyze_stock(symbol)
         if msg:
             send_to_telegram(msg, chart_path)
-        time.sleep(5)  # 避免API限流
+        time.sleep(10)  # 避免API限流
     
     print(f"\n{'='*50}")
     print(f"✅ 分析完成! 已处理 {len(STOCK_LIST)} 只股票")
