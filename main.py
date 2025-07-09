@@ -1,146 +1,126 @@
+import os
+import datetime
 import yfinance as yf
 import matplotlib.pyplot as plt
+import matplotlib
 import pandas as pd
 import requests
-import os
-from datetime import datetime, timedelta, date
 
-# === 安全读取环境变量 ===
-bot_token = os.getenv("TG_BOT_TOKEN")
-chat_id = os.getenv("TG_CHAT_ID")
+# 设置中文字体避免警告
+matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Arial Unicode MS']
+matplotlib.rcParams['axes.unicode_minus'] = False
 
-# === 发送图片到 Telegram 的函数 ===
-def send_telegram_photo(bot_token, chat_id, photo_path, caption=""):
-    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
-    with open(photo_path, "rb") as photo_file:
-        files = {"photo": photo_file}
-        data = {"chat_id": chat_id, "caption": caption}
-        response = requests.post(url, files=files, data=data)
-        if response.status_code == 200:
-            print(f"✅ 已发送：{photo_path}")
-        else:
-            print(f"❌ 发送失败：{response.text}")
+# 读取 Telegram 配置（通过 GitHub Secrets 设置）
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
-# 判断今天是否为交易日
-def is_trading_day(df):
-    today_str = date.today().strftime('%Y-%m-%d')
-    return today_str in df.index.strftime('%Y-%m-%d')
+# 股票列表（你可以继续增加）
+stock_list = ["5255.KL", "0209.KL"]
 
+# 设置图表保存目录
 os.makedirs("charts", exist_ok=True)
 
-my_stocks = ["5255.KL", "0209.KL"]
+# 获取今天日期
+today = datetime.date.today().strftime("%Y-%m-%d")
 
-for stock in my_stocks:
+def send_telegram_message(text):
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+    data = {
+        "chat_id": TG_CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    response = requests.post(url, data=data)
+    return response.json()
+
+def send_telegram_photo(photo_path, caption=""):
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
+    with open(photo_path, "rb") as photo_file:
+        files = {"photo": photo_file}
+        data = {"chat_id": TG_CHAT_ID, "caption": caption}
+        response = requests.post(url, files=files, data=data)
+    return response.json()
+
+def fetch_news_placeholder(stock_code):
+    # 你可以改成真实爬虫或 API 采集
+    return f"暂无重要新闻。"
+
+def analyze_stock(stock):
     print(f"📈 抓取 {stock} 的数据...")
+    df = yf.download(stock, period="10d", interval="1d", auto_adjust=False)
 
-    df = yf.download(stock, period="5d", interval="1d", auto_adjust=False)
-    if df.empty or not is_trading_day(df):
-        print(f"📭 今天 ({date.today()}) 没有 {stock} 的交易数据，跳过。")
-        continue
+    if df.empty or len(df) < 2:
+        print(f"❌ 无法获取 {stock} 的有效数据")
+        return
 
-    df['MA5'] = df['Close'].rolling(5).mean()
-    df['MA20'] = df['Close'].rolling(20).mean()
-
-    # 取最新一行 Series
+    df["MA5"] = df["Close"].rolling(window=5).mean()
     latest = df.iloc[-1]
-    open_price = float(latest["Open"].item())
-    close_price = float(latest["Close"].item())
-    change = close_price - open_price
-    pct_change = (change / open_price) * 100
+    yesterday = df.iloc[-2]
 
-    # 涨跌说明
+    # 使用 .iloc[0] 避免 FutureWarning
+    open_price = round(float(latest["Open"]), 3)
+    close_price = round(float(latest["Close"]), 3)
+
+    change = close_price - open_price
+    percent_change = round(change / open_price * 100, 2)
+
     if change > 0:
-        trend_icon = "📈 上涨"
-        reason = "可能受到市场乐观或利好消息推动。"
+        arrow = "📈 上涨"
+        reason = "今日股价上涨，投资者积极进场。"
     elif change < 0:
-        trend_icon = "📉 下跌"
-        reason = "可能受到市场回调或不利消息影响。"
+        arrow = "📉 下跌"
+        reason = "今日股价下跌，可能受市场情绪影响。"
     else:
-        trend_icon = "➖ 无涨跌"
+        arrow = "➖ 无涨跌"
         reason = "今日股价稳定，缺乏波动。"
 
-    # 取昨日 MA
-    if len(df) >= 2:
-        yesterday = df.iloc[-2]
-        try:
-            y_ma5 = float(yesterday["MA5"].item())
-            y_ma20 = float(yesterday["MA20"].item())
-        except:
-            y_ma5 = y_ma20 = 0.0
-    else:
-        y_ma5 = y_ma20 = 0.0
+    ma5_today = latest["MA5"]
+    ma5_yesterday = yesterday["MA5"]
+    trend_note = ""
+    if not pd.isna(ma5_today) and not pd.isna(ma5_yesterday):
+        if ma5_today > ma5_yesterday:
+            trend_note = "5日均线走高，短期上升趋势。"
+        elif ma5_today < ma5_yesterday:
+            trend_note = "5日均线下滑，短期承压。"
 
-    # 今日 MA
-    try:
-        t_ma5 = float(latest["MA5"].item())
-        t_ma20 = float(latest["MA20"].item())
-    except:
-        t_ma5 = t_ma20 = 0.0
+    # 新闻摘要（你可以替换成真实 API 或爬虫）
+    news_text = fetch_news_placeholder(stock)
 
-    # 趋势提醒
-    trend_advice = ""
-    if close_price > t_ma20:
-        trend_advice = "⚠️ 股价上穿 MA20，有上升动能。"
-    elif t_ma5 > t_ma20 and y_ma5 < y_ma20:
-        trend_advice = "⚠️ MA5 金叉 MA20，或有短线机会。"
-    elif t_ma5 < t_ma20 and y_ma5 > y_ma20:
-        trend_advice = "⚠️ MA5 死叉 MA20，注意风险。"
-
-    # 新闻整合
-    try:
-        ticker = yf.Ticker(stock)
-        all_news = ticker.news
-        news_text = "\n📰 相关新闻："
-        news_found = False
-
-        for news in all_news:
-            pub_date = datetime.fromtimestamp(news.get("providerPublishTime", 0))
-            if datetime.now() - pub_date <= timedelta(days=7):
-                title = news.get("title", "无标题")
-                source = news.get("publisher", "来源未知")
-                news_text += f"\n• [{source}] {title}"
-                news_found = True
-
-        if not news_found and all_news:
-            latest_news = all_news[0]
-            title = latest_news.get("title", "无标题")
-            source = latest_news.get("publisher", "来源未知")
-            pub_date = datetime.fromtimestamp(latest_news.get("providerPublishTime", 0)).strftime('%Y-%m-%d')
-            news_text += f"\n• [旧新闻] {title}（{source}，{pub_date}）"
-        elif not all_news:
-            news_text += "\n• 暂无相关新闻。"
-
-    except Exception:
-        news_text = "\n📰 新闻获取失败。"
-
-    caption = (
-        f"📊 {stock} 股票走势汇报\n"
+    # 输出分析文本
+    message = (
+        f"📊 *{stock} 股票走势汇报*\n"
         f"开市价：RM {open_price:.3f}\n"
         f"收市价：RM {close_price:.3f}\n"
-        f"涨跌：{trend_icon} RM {change:.3f}（{pct_change:.2f}%）\n"
+        f"涨跌：{arrow} RM {abs(change):.3f}（{abs(percent_change):.2f}%）\n"
         f"说明：{reason}\n"
-        f"{trend_advice}"
-        f"{news_text}"
+        f"{trend_note}\n\n"
+        f"📰 今日相关新闻：\n{news_text}"
     )
 
-    # 绘制 60 天走势图
-    hist = yf.download(stock, period="60d", interval="1d", auto_adjust=False)
-    hist['MA5'] = hist['Close'].rolling(5).mean()
-    hist['MA20'] = hist['Close'].rolling(20).mean()
+    send_telegram_message(message)
 
-    plt.figure(figsize=(12, 6))
-    plt.plot(hist['Close'], label='收盘价', color='black')
-    plt.plot(hist['MA5'], label='MA5', color='blue')
-    plt.plot(hist['MA20'], label='MA20', color='red')
-    plt.title(f"{stock} - 近60日走势")
+    # 绘图
+    plt.figure(figsize=(10, 5))
+    df["Close"].plot(label="收市价", color="blue")
+    df["MA5"].plot(label="5日均线", linestyle="--", color="orange")
+    plt.title(f"{stock} - 收盘价与5日均线")
     plt.xlabel("日期")
-    plt.ylabel("价格 (RM)")
+    plt.ylabel("价格")
     plt.legend()
     plt.grid(True)
 
     filename = f"charts/{stock.replace('.KL', '')}_chart.png"
+    plt.tight_layout()
     plt.savefig(filename)
     plt.close()
-
     print(f"✅ 图表已生成：{filename}")
-    send_telegram_photo(bot_token, chat_id, filename, caption=caption)
+
+    res = send_telegram_photo(filename)
+    if res.get("ok"):
+        print(f"✅ 已发送图表至 Telegram")
+    else:
+        print(f"❌ 发送失败：{res}")
+
+# 主执行逻辑
+for code in stock_list:
+    analyze_stock(code)
