@@ -32,10 +32,15 @@ def calculate_technical_indicators(df):
     rs = gain / loss
     df["RSI"] = 100 - (100 / (1 + rs))
     
-    # 布林带
-    df["MiddleBand"] = df["Close"].rolling(window=20).mean()
-    df["UpperBand"] = df["MiddleBand"] + 2 * df["Close"].rolling(window=20).std()
-    df["LowerBand"] = df["MiddleBand"] - 2 * df["Close"].rolling(window=20).std()
+    # 修复布林带计算
+    # 使用rolling计算中间带
+    middle_band = df["Close"].rolling(window=20).mean()
+    std = df["Close"].rolling(window=20).std()
+    
+    # 直接赋值给新列
+    df["MiddleBand"] = middle_band
+    df["UpperBand"] = middle_band + 2 * std
+    df["LowerBand"] = middle_band - 2 * std
     
     # 交易量分析
     df["VolumeMA20"] = df["Volume"].rolling(window=20).mean()
@@ -295,8 +300,8 @@ def main():
         try:
             print(f"📈 抓取 {stock} 的数据...")
             
-            # 获取历史数据（60天）
-            hist_df = yf.download(stock, period="60d", interval="1d")
+            # 获取历史数据（60天），显式设置auto_adjust=False
+            hist_df = yf.download(stock, period="60d", interval="1d", auto_adjust=False)
             if hist_df.empty:
                 print(f"⚠️ 未获取到 {stock} 的数据")
                 continue
@@ -321,9 +326,9 @@ def main():
             # 技术指标数据
             rsi = float(latest["RSI"].iloc[0]) if pd.notna(latest["RSI"].iloc[0]) else 0.0
             volume_change = float(latest["VolumeChange"].iloc[0]) if pd.notna(latest["VolumeChange"].iloc[0]) else 0.0
-            ma5 = float(latest["MA5"].iloc[0])
-            ma20 = float(latest["MA20"].iloc[0])
-            ma50 = float(latest["MA50"].iloc[0])
+            ma5 = float(latest["MA5"].iloc[0]) if pd.notna(latest["MA5"].iloc[0]) else 0.0
+            ma20 = float(latest["MA20"].iloc[0]) if pd.notna(latest["MA20"].iloc[0]) else 0.0
+            ma50 = float(latest["MA50"].iloc[0]) if pd.notna(latest["MA50"].iloc[0]) else 0.0
             
             # 布林带位置分析
             if close_price > float(latest["UpperBand"].iloc[0]):
@@ -356,8 +361,8 @@ def main():
                 trend_advice += "当前股价在20日均线下方，显示中期趋势向下。"
                 
             if prev_day is not None:
-                prev_ma5 = float(prev_day["MA5"].iloc[0])
-                prev_ma20 = float(prev_day["MA20"].iloc[0])
+                prev_ma5 = float(prev_day["MA5"].iloc[0]) if pd.notna(prev_day["MA5"].iloc[0]) else 0.0
+                prev_ma20 = float(prev_day["MA20"].iloc[0]) if pd.notna(prev_day["MA20"].iloc[0]) else 0.0
                 
                 if ma5 > ma20 and prev_ma5 < prev_ma20:
                     trend_advice += " ⚠️ MA5金叉MA20，短线买入信号！"
