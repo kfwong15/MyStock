@@ -5,9 +5,9 @@ import matplotlib.pyplot as plt
 import requests
 
 # ========== 配置 ==========
-TG_BOT_TOKEN    = os.getenv("TG_BOT_TOKEN")
-TG_CHAT_ID      = os.getenv("TG_CHAT_ID")
-DEEPSEEK_API_KEY= os.getenv("DEEPSEEK_API_KEY")
+TG_BOT_TOKEN     = os.getenv("TG_BOT_TOKEN")
+TG_CHAT_ID       = os.getenv("TG_CHAT_ID")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 STOCK_LIST = ["5255.KL", "0209.KL"]
 CHART_DIR  = "charts"
@@ -20,7 +20,6 @@ def fetch_data(symbol):
     return df
 
 def compute_indicators(df):
-    # MA
     df["MA5"]  = df["Close"].rolling(5).mean()
     df["MA20"] = df["Close"].rolling(20).mean()
     # RSI
@@ -34,8 +33,8 @@ def compute_indicators(df):
     # MACD
     ema12 = df["Close"].ewm(span=12, adjust=False).mean()
     ema26 = df["Close"].ewm(span=26, adjust=False).mean()
-    df["MACD"]       = ema12 - ema26
-    df["MACD_SIGNAL"]= df["MACD"].ewm(span=9, adjust=False).mean()
+    df["MACD"]        = ema12 - ema26
+    df["MACD_SIGNAL"] = df["MACD"].ewm(span=9, adjust=False).mean()
     return df
 
 def draw_chart(symbol, df):
@@ -64,15 +63,14 @@ def ask_deepseek(prompt):
     data = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "你是马来西亚股票分析专家，回答请简洁中文。"},
+            {"role": "system", "content": "你是马来西亚股票分析专家，用简短中文回复。"},
             {"role": "user",   "content": prompt}
         ]
     }
     try:
         r = requests.post(url, headers=headers, json=data, timeout=10)
         r.raise_for_status()
-        j = r.json()
-        return j["choices"][0]["message"]["content"]
+        return r.json()["choices"][0]["message"]["content"]
     except Exception as e:
         return f"❌ DeepSeek API 错误：{e}"
 
@@ -91,7 +89,7 @@ def send_to_telegram(text, img_path=None):
 
 # ========== 主流程 ==========
 for symbol in STOCK_LIST:
-    print(f"抓取 {symbol} 数据...")
+    print(f"📈 抓取 {symbol} 数据...")
     df = fetch_data(symbol)
     if df.empty:
         continue
@@ -99,21 +97,21 @@ for symbol in STOCK_LIST:
     latest = df.iloc[-1]
 
     # 基本数据
-    open_p   = latest["Open"]
-    close_p  = latest["Close"]
-    diff     = close_p - open_p
-    pct      = (diff/open_p)*100 if open_p else 0
-    trend    = "📈 上涨" if diff>0 else "📉 下跌" if diff<0 else "➖ 无涨跌"
+    open_p  = float(latest["Open"])
+    close_p = float(latest["Close"])
+    diff    = close_p - open_p
+    pct     = (diff / open_p) * 100 if open_p != 0 else 0.0
+    trend   = "📈 上涨" if diff>0 else "📉 下跌" if diff<0 else "➖ 无涨跌"
 
     # 技术信号
-    signals=[]
-    if latest["MACD"]>latest["MACD_SIGNAL"]:
+    signals = []
+    if latest["MACD"] > latest["MACD_SIGNAL"]:
         signals.append("🟢 MACD 金叉")
     else:
         signals.append("🔴 MACD 死叉")
-    if latest["RSI"]>70:
+    if latest["RSI"] > 70:
         signals.append("🔴 RSI 超买")
-    elif latest["RSI"]<30:
+    elif latest["RSI"] < 30:
         signals.append("🟢 RSI 超卖")
 
     # DeepSeek 分析
@@ -121,12 +119,11 @@ for symbol in STOCK_LIST:
         f"{symbol} 今日收盘 RM{close_p:.2f}，"
         f"涨幅 {pct:.2f}%；"
         f"MA5={latest['MA5']:.2f}，MA20={latest['MA20']:.2f}，"
-        f"RSI={latest['RSI']:.2f}，"
-        f"MACD={latest['MACD']:.2f}。"
+        f"RSI={latest['RSI']:.2f}，MACD={latest['MACD']:.2f}。"
     )
     ai_comment = ask_deepseek(prompt)
 
-    # 文本
+    # 构建消息
     msg = (
         f"📊 {symbol} 股票简报\n"
         f"开盘价：RM {open_p:.3f}\n"
@@ -138,4 +135,4 @@ for symbol in STOCK_LIST:
 
     chart = draw_chart(symbol, df)
     send_to_telegram(msg, chart)
-    print("完成", symbol)
+    print("✅ 完成", symbol)
