@@ -2,17 +2,14 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
-import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
-# 读取 Telegram 配置
-with open("config.json", "r") as f:
-    config = json.load(f)
-bot_token = config["bot_token"]
-chat_id = config["chat_id"]
+# === 安全读取环境变量 ===
+bot_token = os.getenv("TG_BOT_TOKEN")
+chat_id = os.getenv("TG_CHAT_ID")
 
-# 发送图片到 Telegram
+# === Telegram 发送图片函数 ===
 def send_telegram_photo(bot_token, chat_id, photo_path, caption=""):
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
     with open(photo_path, "rb") as photo_file:
@@ -24,6 +21,11 @@ def send_telegram_photo(bot_token, chat_id, photo_path, caption=""):
         else:
             print(f"❌ 发送失败：{response.text}")
 
+# 判断是否今天有交易数据
+def is_trading_day(df):
+    today_str = date.today().strftime('%Y-%m-%d')
+    return today_str in df.index.strftime('%Y-%m-%d')
+
 # 创建图表文件夹
 os.makedirs("charts", exist_ok=True)
 
@@ -33,18 +35,18 @@ my_stocks = ["5255.KL", "0209.KL"]
 for stock in my_stocks:
     print(f"📈 抓取 {stock} 的数据...")
 
-    # 抓近5日用于分析
+    # 获取近 5 日用于分析
     df = yf.download(stock, period="5d", interval="1d", auto_adjust=False)
 
-    if df.empty:
-        print(f"⚠️ 未获取到 {stock} 数据")
+    # 检查是否为交易日
+    if not is_trading_day(df):
+        print(f"📭 今天 ({date.today()}) 没有 {stock} 的交易数据，跳过发送。")
         continue
 
     df['MA5'] = df['Close'].rolling(window=5).mean()
     df['MA20'] = df['Close'].rolling(window=20).mean()
 
     latest = df.iloc[-1]
-
     open_price = float(latest["Open"])
     close_price = float(latest["Close"])
     change = close_price - open_price
@@ -53,48 +55,35 @@ for stock in my_stocks:
     # 涨跌说明
     if change > 0:
         trend_icon = "📈 上涨"
-        reason = "可能受到市场乐观或业绩预期带动。"
+        reason = "可能受到市场乐观或利好消息推动。"
     elif change < 0:
         trend_icon = "📉 下跌"
-        reason = "可能受到市场回调或负面情绪影响。"
+        reason = "可能受到市场回调或不利消息影响。"
     else:
         trend_icon = "➖ 无涨跌"
         reason = "今日股价稳定，缺乏波动。"
 
-    # 获取昨日 MA 数据（安全转换）
+    # MA 数据准备
     if len(df) >= 2:
         yesterday = df.iloc[-2]
-        try:
-            yesterday_MA5 = float(yesterday["MA5"])
-        except:
-            yesterday_MA5 = 0.0
-        try:
-            yesterday_MA20 = float(yesterday["MA20"])
-        except:
-            yesterday_MA20 = 0.0
+        yesterday_MA5 = float(yesterday["MA5"]) if not pd.isna(yesterday["MA5"]) else 0.0
+        yesterday_MA20 = float(yesterday["MA20"]) if not pd.isna(yesterday["MA20"]) else 0.0
     else:
         yesterday_MA5 = yesterday_MA20 = 0.0
 
-    # 获取今日 MA 数据（安全转换）
-    try:
-        today_MA5 = float(latest["MA5"])
-    except:
-        today_MA5 = 0.0
-    try:
-        today_MA20 = float(latest["MA20"])
-    except:
-        today_MA20 = 0.0
+    today_MA5 = float(latest["MA5"]) if not pd.isna(latest["MA5"]) else 0.0
+    today_MA20 = float(latest["MA20"]) if not pd.isna(latest["MA20"]) else 0.0
 
-    # 趋势提醒
+    # 趋势判断
     trend_advice = ""
     if close_price > today_MA20:
-        trend_advice = "⚠️ 明日关注：当前股价已上穿 MA20，有短期上升动能。"
+        trend_advice = "⚠️ 股价上穿 MA20，有上升动能。"
     elif today_MA5 > today_MA20 and yesterday_MA5 < yesterday_MA20:
-        trend_advice = "⚠️ 明日关注：出现 MA5 金叉 MA20，或有短线机会。"
+        trend_advice = "⚠️ MA5 金叉 MA20，或有短线机会。"
     elif today_MA5 < today_MA20 and yesterday_MA5 > yesterday_MA20:
-        trend_advice = "⚠️ 注意：出现 MA5 死叉 MA20，或有短期回调压力。"
+        trend_advice = "⚠️ MA5 死叉 MA20，注意风险。"
 
-    # 新闻整合逻辑（近7天 + 最近一次旧新闻）
+    # 新闻整合
     try:
         ticker = yf.Ticker(stock)
         all_news = ticker.news
@@ -102,17 +91,13 @@ for stock in my_stocks:
         news_found = False
 
         for news in all_news:
-            try:
-                pub_date = datetime.fromtimestamp(news.get("providerPublishTime", 0))
-            except:
-                continue
+            pub_date = datetime.fromtimestamp(news.get("providerPublishTime", 0))
             if datetime.now() - pub_date <= timedelta(days=7):
                 title = news.get("title", "无标题")
                 source = news.get("publisher", "来源未知")
                 news_text += f"\n• [{source}] {title}"
                 news_found = True
 
-        # 如果 7 天内没有新闻，显示最近一条旧新闻
         if not news_found and all_news:
             latest_news = all_news[0]
             title = latest_news.get("title", "无标题")
@@ -122,10 +107,10 @@ for stock in my_stocks:
         elif not all_news:
             news_text += "\n• 暂无相关新闻。"
 
-    except Exception as e:
+    except Exception:
         news_text = "\n📰 新闻获取失败。"
 
-    # 整体信息文字
+    # 汇总文字信息
     caption = (
         f"📊 {stock} 股票走势汇报\n"
         f"开市价：RM {open_price:.3f}\n"
@@ -136,17 +121,16 @@ for stock in my_stocks:
         f"{news_text}"
     )
 
-    # 获取图表数据（60 天）
+    # 图表绘制（60天）
     hist_df = yf.download(stock, period="60d", interval="1d", auto_adjust=False)
     hist_df['MA5'] = hist_df['Close'].rolling(window=5).mean()
     hist_df['MA20'] = hist_df['Close'].rolling(window=20).mean()
 
-    # 画图
     plt.figure(figsize=(12, 6))
     plt.plot(hist_df['Close'], label='收盘价', color='black')
-    plt.plot(hist_df['MA5'], label='5日均线', color='blue')
-    plt.plot(hist_df['MA20'], label='20日均线', color='red')
-    plt.title(f"{stock} - 近60日走势图")
+    plt.plot(hist_df['MA5'], label='MA5', color='blue')
+    plt.plot(hist_df['MA20'], label='MA20', color='red')
+    plt.title(f"{stock} - 近60日走势")
     plt.xlabel("日期")
     plt.ylabel("价格 (RM)")
     plt.legend()
