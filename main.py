@@ -2,14 +2,24 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
+import json
 import os
 
-# ✅ 从 GitHub 环境变量读取配置（更安全）
-bot_token = os.getenv("TG_BOT_TOKEN")
-chat_id = os.getenv("TG_CHAT_ID")
+# =================== 配置 ====================
+TELEGRAM_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TG_CHAT_ID")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-# 发送图片到 Telegram
-def send_telegram_photo(photo_path, caption=""):
+# 自选股列表
+my_stocks = ["5255.KL", "0209.KL"]
+
+# 创建图表目录
+os.makedirs("charts", exist_ok=True)
+
+# =================== 函数定义 ====================
+
+# 📤 Telegram 发送图片
+def send_telegram_photo(bot_token, chat_id, photo_path, caption=""):
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
     with open(photo_path, "rb") as photo_file:
         files = {"photo": photo_file}
@@ -20,109 +30,116 @@ def send_telegram_photo(photo_path, caption=""):
         else:
             print(f"❌ 发送失败：{response.text}")
 
-# 创建图表目录
-os.makedirs("charts", exist_ok=True)
+# 🤖 调用 DeepSeek 分析评论
+def ask_deepseek(prompt):
+    url = "https://api.deepseek.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "你是一名股票分析助理，请用简洁方式分析股票表现。"},
+            {"role": "user", "content": prompt}
+        ]
+    }
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 200:
+        res_json = response.json()
+        if "choices" in res_json:
+            return res_json["choices"][0]["message"]["content"]
+        else:
+            return "❌ DeepSeek API 返回无效内容。"
+    else:
+        return f"❌ DeepSeek API 错误：{response.text}"
 
-# 自选股列表
-my_stocks = ["5255.KL", "0209.KL"]
+# =================== 主逻辑 ====================
 
 for stock in my_stocks:
     print(f"📈 抓取 {stock} 的数据...")
+    df = yf.download(stock, period="60d", interval="1d")
 
-    df = yf.download(stock, period="5d", interval="1d", auto_adjust=False)
     if df.empty:
-        print(f"⚠️ 未获取到 {stock} 的数据")
+        print(f"⚠️ 无法获取 {stock} 的数据")
         continue
 
     df["MA5"] = df["Close"].rolling(window=5).mean()
     df["MA20"] = df["Close"].rolling(window=20).mean()
-    latest = df.iloc[[-1]]  # 保证仍是 DataFrame
 
-    try:
-        open_price = float(latest["Open"].iloc[0])
-        close_price = float(latest["Close"].iloc[0])
-    except:
-        open_price = close_price = 0.0
+    # RSI (14日)
+    delta = df["Close"].diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    df["RSI"] = 100 - (100 / (1 + rs))
 
+    # MACD
+    exp1 = df["Close"].ewm(span=12, adjust=False).mean()
+    exp2 = df["Close"].ewm(span=26, adjust=False).mean()
+    df["MACD"] = exp1 - exp2
+    df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+
+    # 当前数据
+    latest = df.iloc[-1]
+    open_price = float(latest["Open"])
+    close_price = float(latest["Close"])
     change = close_price - open_price
-    pct_change = (change / open_price) * 100 if open_price else 0.0
+    pct_change = (change / open_price) * 100
+    ma5 = float(latest["MA5"])
+    ma20 = float(latest["MA20"])
+    rsi = float(latest["RSI"])
+    macd = float(latest["MACD"])
+    signal = float(latest["Signal"])
 
-    # 涨跌趋势分析
+    # 趋势判断
+    trend_icon = "➖ 无涨跌"
     if change > 0:
         trend_icon = "📈 上涨"
-        reason = "可能受到市场乐观或业绩预期带动。"
     elif change < 0:
         trend_icon = "📉 下跌"
-        reason = "可能受到市场回调或负面情绪影响。"
-    else:
-        trend_icon = "➖ 无涨跌"
-        reason = "今日股价稳定，缺乏波动。"
 
-    # 获取昨日 MA 数据
-    if len(df) >= 2:
-        yesterday = df.iloc[[-2]]
-        yesterday_MA5 = float(yesterday["MA5"].iloc[0]) if pd.notna(yesterday["MA5"].iloc[0]) else 0.0
-        yesterday_MA20 = float(yesterday["MA20"].iloc[0]) if pd.notna(yesterday["MA20"].iloc[0]) else 0.0
-    else:
-        yesterday_MA5 = yesterday_MA20 = 0.0
+    tech_signal = ""
+    if rsi > 70:
+        tech_signal += "🔴 RSI > 70，超买风险。\n"
+    elif rsi < 30:
+        tech_signal += "🟢 RSI < 30，可能超卖反弹。\n"
 
-    # 今日 MA
-    today_MA5 = float(latest["MA5"].iloc[0]) if pd.notna(latest["MA5"].iloc[0]) else 0.0
-    today_MA20 = float(latest["MA20"].iloc[0]) if pd.notna(latest["MA20"].iloc[0]) else 0.0
+    if macd > signal:
+        tech_signal += "🟢 MACD 金叉，或有上升动能。\n"
+    elif macd < signal:
+        tech_signal += "🔴 MACD 死叉，警惕回调。\n"
 
-    # 趋势建议
-    trend_advice = ""
-    if close_price > today_MA20:
-        trend_advice = "⚠️ 明日关注：当前股价已上穿 MA20，有短期上升动能。"
-    elif today_MA5 > today_MA20 and yesterday_MA5 < yesterday_MA20:
-        trend_advice = "⚠️ 明日关注：出现 MA5 金叉 MA20，或有短线机会。"
-    elif today_MA5 < today_MA20 and yesterday_MA5 > yesterday_MA20:
-        trend_advice = "⚠️ 注意：出现 MA5 死叉 MA20，或有短期回调压力。"
+    # DeepSeek 评论
+    prompt = f"分析股票 {stock}，今日收盘价 RM{close_price:.2f}，涨幅 {pct_change:.2f}%。MA5={ma5:.2f}，MA20={ma20:.2f}，RSI={rsi:.2f}，MACD={macd:.2f}，Signal={signal:.2f}。请简要分析趋势并给出判断建议（用中文）。"
+    deepseek_comment = ask_deepseek(prompt)
 
-    # 新闻
-    try:
-        ticker = yf.Ticker(stock)
-        news_items = ticker.news[:3]
-        if news_items:
-            news_text = "\n📰 今日相关新闻："
-            for news in news_items:
-                title = news.get("title", "无标题")
-                source = news.get("publisher", "来源未知")
-                news_text += f"\n• [{source}] {title}"
-        else:
-            news_text = "\n📰 今日相关新闻：暂无相关新闻。"
-    except:
-        news_text = "\n📰 今日相关新闻：获取失败。"
-
-    # 总结
+    # 汇总内容
     caption = (
-        f"📊 {stock} 股票走势汇报\n"
+        f"📊 {stock} 股票简报\n"
         f"开市价：RM {open_price:.3f}\n"
         f"收市价：RM {close_price:.3f}\n"
-        f"涨跌：{trend_icon} RM {change:.3f}（{pct_change:.2f}%）\n"
-        f"说明：{reason}\n"
-        f"{trend_advice}"
-        f"{news_text}"
+        f"涨跌：{trend_icon} RM {change:.3f}（{pct_change:.2f}%）\n\n"
+        f"{tech_signal}"
+        f"\n🤖 DeepSeek 分析：\n{deepseek_comment}"
     )
 
     # 绘图
-    hist_df = yf.download(stock, period="60d", interval="1d", auto_adjust=False)
-    hist_df["MA5"] = hist_df["Close"].rolling(window=5).mean()
-    hist_df["MA20"] = hist_df["Close"].rolling(window=20).mean()
-
     plt.figure(figsize=(12, 6))
-    plt.plot(hist_df["Close"], label="收盘价", color="black")
-    plt.plot(hist_df["MA5"], label="5日均线", color="blue")
-    plt.plot(hist_df["MA20"], label="20日均线", color="red")
-    plt.title(f"{stock} - 近60日走势图")
+    plt.plot(df["Close"], label="收盘价", color="black")
+    plt.plot(df["MA5"], label="MA5", color="blue")
+    plt.plot(df["MA20"], label="MA20", color="red")
+    plt.title(f"{stock} 近60日走势图")
     plt.xlabel("日期")
     plt.ylabel("价格 (RM)")
     plt.legend()
     plt.grid(True)
 
-    filename = f"charts/{stock.replace('.KL', '')}_chart.png"
-    plt.savefig(filename)
+    chart_path = f"charts/{stock.replace('.KL','')}_chart.png"
+    plt.savefig(chart_path)
     plt.close()
+    print(f"✅ 图表已生成：{chart_path}")
 
-    print(f"✅ 图表已生成：{filename}")
-    send_telegram_photo(filename, caption)
+    send_telegram_photo(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, chart_path, caption)
