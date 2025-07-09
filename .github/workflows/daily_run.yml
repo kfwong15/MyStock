@@ -1,29 +1,25 @@
-name: MyStock 每日运行
+name: Run Stock Bot Daily
 
 on:
   schedule:
-    - cron: '30 1 * * 1-5'   # MYT 9:30 AM（UTC 1:30 AM）
-    - cron: '40 5 * * 1-5'   # MYT 1:40 PM（UTC 5:40 AM）
-    - cron: '0 11 * * 1-5'   # MYT 7:00 PM（UTC 11:00 AM）
-  workflow_dispatch:        # 支持手动执行
+    - cron: '30 1,5,11 * * 1-5' # 每个工作日 9:30AM, 1:40PM, 7:00PM（UTC 时间）
+  workflow_dispatch:
 
 jobs:
-  run-stock-bot:
+  build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: 拉取代码
+      - name: Checkout Repo
         uses: actions/checkout@v3
 
-      - name: 设置 Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      - name: 安装依赖
+      - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 执行主程序
+      - name: Run Script
         run: python main.py
