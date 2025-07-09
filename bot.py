@@ -1,102 +1,112 @@
-import os
-import requests
-import yfinance as yf
 from flask import Flask, request
+import os, requests, yfinance as yf
+import matplotlib.pyplot as plt
+import pandas as pd
+import io
 
 app = Flask(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "default")
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+def send_message(chat_id, text):
+    requests.post(f"{TELEGRAM_API}/sendMessage", json={"chat_id": chat_id, "text": text})
 
-# 获取股票信息简报
-def get_stock_summary(stock_code):
+def send_photo(chat_id, image_bytes, caption=""):
+    files = {"photo": ("chart.png", image_bytes)}
+    data = {"chat_id": chat_id, "caption": caption}
+    requests.post(f"{TELEGRAM_API}/sendPhoto", files=files, data=data)
+
+def analyze_stock(symbol):
+    df = yf.download(symbol, period="60d", interval="1d", auto_adjust=True)
+    if df.empty: return None, "⚠️ 找不到股票数据"
+
+    # 技术指标
+    df["MA5"] = df["Close"].rolling(window=5).mean()
+    df["MA20"] = df["Close"].rolling(window=20).mean()
+    delta = df["Close"].diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    df["RSI"] = 100 - (100 / (1 + rs))
+    df["EMA12"] = df["Close"].ewm(span=12).mean()
+    df["EMA26"] = df["Close"].ewm(span=26).mean()
+    df["MACD"] = df["EMA12"] - df["EMA26"]
+
+    latest = df.iloc[-1]
+    text = (
+        f"📊 {symbol} 股票分析\n"
+        f"收盘价：RM {latest['Close']:.3f}\n"
+        f"MA5：{latest['MA5']:.3f} | MA20：{latest['MA20']:.3f}\n"
+        f"RSI：{latest['RSI']:.2f} | MACD：{latest['MACD']:.3f}\n"
+    )
+
+    # AI 解读
+    ai_msg = ask_deepseek(f"{symbol} 收盘价为 RM {latest['Close']:.2f}，RSI 为 {latest['RSI']:.2f}，MACD 为 {latest['MACD']:.2f}。请用中文简要分析股票短期趋势。")
+    text += "\n🤖 DeepSeek 分析：\n" + ai_msg
+
+    # 画图
+    buf = io.BytesIO()
+    plt.figure(figsize=(10, 5))
+    plt.plot(df["Close"], label="Close", color="black")
+    plt.plot(df["MA5"], label="MA5", color="blue")
+    plt.plot(df["MA20"], label="MA20", color="red")
+    plt.title(f"{symbol} 近60日走势")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+
+    return buf, text
+
+def ask_deepseek(prompt):
     try:
-        stock = yf.Ticker(stock_code)
-        df = stock.history(period="5d")
-        if df.empty:
-            return f"❌ 无法获取 {stock_code} 的数据"
-
-        latest = df.iloc[-1]
-        open_price = latest['Open']
-        close_price = latest['Close']
-        change = close_price - open_price
-        pct = (change / open_price) * 100
-
-        trend = "📈 上涨" if change > 0 else "📉 下跌" if change < 0 else "➖ 无涨跌"
-        summary = (
-            f"📊 {stock_code} 股票简报\n"
-            f"开市价：RM {open_price:.3f}\n"
-            f"收市价：RM {close_price:.3f}\n"
-            f"涨跌：{trend} RM {change:.3f}（{pct:.2f}%）"
-        )
-
-        # DeepSeek AI 分析建议
-        suggestion = ask_deepseek_ai(stock_code, summary)
-        return summary + "\n\n" + suggestion
-
-    except Exception as e:
-        return f"⚠️ 获取失败：{str(e)}"
-
-# DeepSeek AI 调用
-def ask_deepseek_ai(stock_code, summary_text):
-    prompt = f"以下是股票 {stock_code} 的简报：\n{summary_text}\n请用中文分析这个股票的技术趋势，并给出明日建议。"
-    try:
-        response = requests.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": "你是一位资深股票技术分析师。"},
-                    {"role": "user", "content": prompt}
-                ]
-            }
-        )
-        result = response.json()
-        return "🤖 DeepSeek 分析：\n" + result["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"❌ DeepSeek API 错误：{str(e)}"
-
-# 接收 Webhook
-@app.route("/webhook", methods=["POST"])
-def telegram_webhook():
-    data = request.get_json()
-    if not data or "message" not in data:
-        return "ignored", 200
-
-    msg = data["message"]
-    chat_id = msg["chat"]["id"]
-    text = msg.get("text", "")
-
-    if text.startswith("/stock"):
-        parts = text.split(" ")
-        if len(parts) >= 2:
-            stock_code = parts[1].upper()
-            reply = get_stock_summary(stock_code)
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+        }
+        data = {
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        response = requests.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=data, timeout=20)
+        if response.status_code == 200:
+            return response.json()["choices"][0]["message"]["content"]
         else:
-            reply = "请提供股票代码，例如：/stock 5255.KL"
-    elif text.startswith("/start"):
-        reply = "欢迎使用📈股票机器人！\n输入 /stock 股票代码 查询行情。"
-    else:
-        reply = "🤖 指令无效，请输入 /stock 股票代码"
-
-    # 发送回复
-    requests.post(TELEGRAM_API, json={
-        "chat_id": chat_id,
-        "text": reply
-    })
-
-    return "ok", 200
+            return "❌ DeepSeek 失败"
+    except Exception as e:
+        return f"❌ DeepSeek 错误：{e}"
 
 @app.route("/")
-def root():
+def home():
     return "✅ Bot is running."
 
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
+
+        if text.startswith("/start"):
+            send_message(chat_id, "👋 欢迎使用股票机器人！\n发送 /stock 代码，如 /stock 0209.KL")
+        elif text.startswith("/stock"):
+            parts = text.split()
+            if len(parts) != 2:
+                send_message(chat_id, "⚠️ 用法错误：请输入 /stock 股票代码")
+            else:
+                symbol = parts[1].strip()
+                buf, msg = analyze_stock(symbol)
+                if buf:
+                    send_photo(chat_id, buf, caption=msg)
+                else:
+                    send_message(chat_id, msg)
+        else:
+            send_message(chat_id, "🤖 无效指令，请使用 /stock 代码")
+    return "OK"
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    app.run(debug=True)
