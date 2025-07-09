@@ -23,20 +23,20 @@ def send_telegram_photo(bot_token, chat_id, photo_path, caption=""):
         else:
             print(f"❌ 发送失败：{response.text}")
 
-# 创建图表文件夹
+# 创建图表目录
 os.makedirs("charts", exist_ok=True)
 
-# 自选股票列表
+# 自选股列表
 my_stocks = ["5255.KL", "0209.KL"]
 
 for stock in my_stocks:
     print(f"📈 抓取 {stock} 的数据...")
 
-    # 抓近5日用于涨跌分析
+    # 下载近5天数据
     df = yf.download(stock, period="5d", interval="1d", auto_adjust=False)
 
     if df.empty:
-        print(f"⚠️ 未获取到 {stock} 数据")
+        print(f"⚠️ 未获取到 {stock} 的数据")
         continue
 
     df['MA5'] = df['Close'].rolling(window=5).mean()
@@ -44,7 +44,7 @@ for stock in my_stocks:
 
     latest = df.iloc[-1]
 
-    # 当日开盘/收盘价
+    # 开盘价与收盘价
     open_price = float(latest["Open"])
     close_price = float(latest["Close"])
     change = close_price - open_price
@@ -61,35 +61,31 @@ for stock in my_stocks:
         trend_icon = "➖ 无涨跌"
         reason = "今日股价稳定，缺乏波动。"
 
-    # 获取昨日 MA 数据并安全处理
+    # 获取昨日 MA 数据（安全转换）
     if len(df) >= 2:
         yesterday = df.iloc[-2]
-        y_ma5 = yesterday["MA5"]
-        y_ma20 = yesterday["MA20"]
         try:
-            yesterday_MA5 = float(y_ma5)
+            yesterday_MA5 = float(yesterday["MA5"])
         except:
             yesterday_MA5 = 0.0
         try:
-            yesterday_MA20 = float(y_ma20)
+            yesterday_MA20 = float(yesterday["MA20"])
         except:
             yesterday_MA20 = 0.0
     else:
         yesterday_MA5 = yesterday_MA20 = 0.0
 
-    # 获取今日 MA 数据并安全处理
-    t_ma5 = latest["MA5"]
-    t_ma20 = latest["MA20"]
+    # 获取今日 MA 数据（安全转换）
     try:
-        today_MA5 = float(t_ma5)
+        today_MA5 = float(latest["MA5"])
     except:
         today_MA5 = 0.0
     try:
-        today_MA20 = float(t_ma20)
+        today_MA20 = float(latest["MA20"])
     except:
         today_MA20 = 0.0
 
-    # 趋势判断
+    # 趋势提醒判断
     trend_advice = ""
     if close_price > today_MA20:
         trend_advice = "⚠️ 明日关注：当前股价已上穿 MA20，有短期上升动能。"
@@ -98,19 +94,22 @@ for stock in my_stocks:
     elif today_MA5 < today_MA20 and yesterday_MA5 > yesterday_MA20:
         trend_advice = "⚠️ 注意：出现 MA5 死叉 MA20，或有短期回调压力。"
 
-    # 获取新闻标题（最多3条）
+    # 获取新闻（处理无新闻情况）
     try:
         ticker = yf.Ticker(stock)
         news_items = ticker.news[:3]
-        news_text = "\n📰 今日相关新闻："
-        for news in news_items:
-            title = news.get("title", "无标题")
-            source = news.get("publisher", "来源未知")
-            news_text += f"\n• [{source}] {title}"
+        if news_items:
+            news_text = "\n📰 今日相关新闻："
+            for news in news_items:
+                title = news.get("title", "无标题")
+                source = news.get("publisher", "来源未知")
+                news_text += f"\n• [{source}] {title}"
+        else:
+            news_text = "\n📰 今日相关新闻：暂无相关新闻。"
     except:
-        news_text = "\n📰 未能获取相关新闻。"
+        news_text = "\n📰 今日相关新闻：获取失败。"
 
-    # 整体文字内容
+    # 汇总文字说明
     caption = (
         f"📊 {stock} 股票走势汇报\n"
         f"开市价：RM {open_price:.3f}\n"
@@ -121,7 +120,7 @@ for stock in my_stocks:
         f"{news_text}"
     )
 
-    # 获取60日用于绘图
+    # 抓取历史数据用于绘图
     hist_df = yf.download(stock, period="60d", interval="1d", auto_adjust=False)
     hist_df['MA5'] = hist_df['Close'].rolling(window=5).mean()
     hist_df['MA20'] = hist_df['Close'].rolling(window=20).mean()
