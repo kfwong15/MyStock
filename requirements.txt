@@ -1,6 +1,5 @@
 yfinance
 matplotlib
 pandas
-requests
 pandas-ta
-numpy==1.23.5
+requests
