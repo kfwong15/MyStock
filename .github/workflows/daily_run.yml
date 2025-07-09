@@ -2,21 +2,17 @@ name: Daily Stock Report
 
 on:
   schedule:
-    # 马来西亚时区为 UTC+8，因此以下时间为：
-    # - 1:30AM UTC = 9:30AM MYT
-    # - 5:40AM UTC = 1:40PM MYT
-    # - 11:00AM UTC = 7:00PM MYT
-    - cron: '30 1 * * *'
-    - cron: '40 5 * * *'
-    - cron: '0 11 * * *'
-  workflow_dispatch:  # 手动触发按钮
+    - cron: '0 1 * * *'   # 马来西亚 09:00
+    - cron: '30 5 * * *'  # 马来西亚 13:30
+    - cron: '0 11 * * *'  # 马来西亚 19:00
+  workflow_dispatch:      # 允许手动触发
 
 jobs:
-  report:
+  run-script:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Repo
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -27,10 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install yfinance matplotlib pandas requests
 
-      - name: Run Main Script
-        env:
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      - name: Run main.py
         run: python main.py
