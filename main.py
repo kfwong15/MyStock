@@ -1,4 +1,5 @@
 import os
+import yfinance as yf
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
@@ -10,9 +11,7 @@ import pytz
 from datetime import datetime, timedelta
 import time
 import re
-import json
 import traceback
-from bs4 import BeautifulSoup
 import random
 
 # ========== 配置 ==========
@@ -21,12 +20,12 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 # 处理股票列表
-stock_list_str = os.getenv("STOCK_LIST", "5255,0209")
+stock_list_str = os.getenv("STOCK_LIST", "5255.KL,0209.KL")
 STOCK_LIST = [s.strip().upper() for s in stock_list_str.split(",") if s.strip()]
 
 # 如果没有股票列表，使用默认值
 if not STOCK_LIST:
-    STOCK_LIST = ["5255", "0209"]
+    STOCK_LIST = ["5255.KL", "0209.KL"]
 
 CHART_DIR = "charts"
 os.makedirs(CHART_DIR, exist_ok=True)
@@ -45,20 +44,20 @@ USER_AGENTS = [
 
 # ========== 工具函数 ==========
 def fetch_data(symbol, retries=3):
-    """获取股票数据，使用Investing.com数据源"""
-    if not symbol or not re.match(r"^[0-9]{4}$", symbol):
+    """获取股票数据，使用改进的yfinance方法"""
+    if not symbol:
         print(f"⚠️ 无效的股票代码: {symbol}")
         return pd.DataFrame()
     
-    # 尝试使用Investing.com获取数据
-    df = fetch_investing_data(symbol, retries)
+    # 尝试使用yfinance获取数据
+    df = fetch_yfinance_data(symbol, retries)
     if not df.empty:
         return df
     
     return pd.DataFrame()
 
-def fetch_investing_data(symbol, retries=3):
-    """使用Investing.com获取股票数据"""
+def fetch_yfinance_data(symbol, retries=3):
+    """使用yfinance获取数据，带重试和错误处理"""
     for attempt in range(retries):
         try:
             # 随机选择用户代理
@@ -67,90 +66,50 @@ def fetch_investing_data(symbol, retries=3):
                 "User-Agent": user_agent,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5",
-                "Referer": "https://www.investing.com/",
                 "DNT": "1",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1"
+                "Connection": "keep-alive"
             }
             
-            print(f"🔍 [Investing.com] 获取 {symbol} 数据 (尝试 {attempt+1}/{retries})...")
+            print(f"🔍 [yfinance] 获取 {symbol} 数据 (尝试 {attempt+1}/{retries})...")
             
-            # 第一步：搜索股票获取ID
-            search_url = f"https://www.investing.com/search/?q={symbol}&tab=stocks"
-            response = requests.get(search_url, headers=headers, timeout=15)
-            response.raise_for_status()
+            # 设置自定义会话
+            session = requests.Session()
+            session.headers.update(headers)
             
-            soup = BeautifulSoup(response.text, 'html.parser')
-            result_link = soup.find('a', class_='js-inner-all-results-quote-item row')
+            # 创建Ticker对象
+            ticker = yf.Ticker(symbol, session=session)
             
-            if not result_link:
-                print(f"⚠️ [Investing.com] 未找到 {symbol} 的搜索结果")
-                continue
-                
-            stock_url = "https://www.investing.com" + result_link['href']
-            stock_id = stock_url.split('-')[-1]
+            # 获取3个月数据
+            end_date = datetime.now(MYT)
+            start_date = end_date - timedelta(days=90)
             
-            # 第二步：获取历史数据
-            history_url = f"https://api.investing.com/api/financialdata/historical/{stock_id}?start-date={datetime.now().strftime('%Y-%m-%d')}&end-date={datetime.now().strftime('%Y-%m-%d')}&time-frame=Daily&add-missing-rows=false"
+            # 获取历史数据
+            df = ticker.history(
+                start=start_date.strftime('%Y-%m-%d'),
+                end=end_date.strftime('%Y-%m-%d'),
+                interval='1d',
+                auto_adjust=True
+            )
             
-            # 添加API特定的头
-            api_headers = {
-                **headers,
-                "X-Requested-With": "XMLHttpRequest",
-                "Origin": "https://www.investing.com",
-                "Sec-Fetch-Dest": "empty",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Site": "same-site"
-            }
-            
-            response = requests.get(history_url, headers=api_headers, timeout=15)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # 解析数据
-            history_data = []
-            for item in data.get('data', []):
-                timestamp = item[0]  # 时间戳（毫秒）
-                date = datetime.fromtimestamp(timestamp / 1000)
-                open_price = item[1]
-                high_price = item[2]
-                low_price = item[3]
-                close_price = item[4]
-                volume = item[5]
-                
-                history_data.append({
-                    'Date': date,
-                    'Open': open_price,
-                    'High': high_price,
-                    'Low': low_price,
-                    'Close': close_price,
-                    'Volume': volume
-                })
-            
-            # 创建DataFrame
-            df = pd.DataFrame(history_data)
-            
-            if not df.empty:
-                df.set_index('Date', inplace=True)
+            if not df.empty and len(df) > 10:
                 # 转换为马来西亚时区
                 if df.index.tz is None:
                     df.index = df.index.tz_localize('UTC').tz_convert(MYT)
                 else:
                     df.index = df.index.tz_convert(MYT)
                 
-                # 按日期排序
-                df.sort_index(ascending=True, inplace=True)
-                
-                print(f"✅ [Investing.com] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
+                df.dropna(inplace=True)
+                print(f"✅ [yfinance] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
                 return df
             else:
-                print(f"⚠️ [Investing.com] {symbol} 返回空数据")
+                print(f"⚠️ [yfinance] {symbol} 返回空数据")
                 
         except Exception as e:
-            print(f"⚠️ [Investing.com] 获取 {symbol} 数据失败: {str(e)}")
+            print(f"⚠️ [yfinance] 获取 {symbol} 数据失败: {str(e)}")
             traceback.print_exc()
-            time.sleep(2 + attempt)  # 增加等待时间
+        
+        # 随机延迟避免请求过快
+        time.sleep(2 + random.uniform(0, 3))
     
     return pd.DataFrame()
 
@@ -216,7 +175,7 @@ def draw_chart(symbol, df):
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
 
-    path = f"{CHART_DIR}/{symbol}_chart.png"
+    path = f"{CHART_DIR}/{symbol.replace('.KL','')}_chart.png"
     plt.savefig(path, dpi=100, bbox_inches='tight')
     plt.close()
     print(f"📊 已生成 {symbol} 图表: {path}")
@@ -408,7 +367,8 @@ def main():
         msg, chart_path = analyze_stock(symbol)
         if msg:
             send_to_telegram(msg, chart_path)
-        time.sleep(10)  # 避免API限流
+        # 随机延迟避免请求过快
+        time.sleep(5 + random.uniform(0, 5))
     
     print(f"\n{'='*50}")
     print(f"✅ 分析完成! 已处理 {len(STOCK_LIST)} 只股票")
