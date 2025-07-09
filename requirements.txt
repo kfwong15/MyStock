@@ -1,5 +1,4 @@
 yfinance
 matplotlib
 pandas
-pandas-ta
 requests
