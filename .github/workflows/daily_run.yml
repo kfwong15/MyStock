@@ -2,18 +2,16 @@ name: Daily Stock Report
 
 on:
   schedule:
-    # 马来西亚时区为 UTC+8，因此以下时间为：
-    # - 1:30AM UTC = 9:30AM MYT
-    # - 5:40AM UTC = 1:40PM MYT
-    # - 11:00AM UTC = 7:00PM MYT
-    - cron: '30 1 * * *'
-    - cron: '40 5 * * *'
-    - cron: '0 11 * * *'
+    # 马来西亚时区 (UTC+8)
+    - cron: '30 1 * * *'   # 9:30AM MYT (开市前)
+    - cron: '40 5 * * *'   # 1:40PM MYT (午市后)
+    - cron: '0 11 * * *'   # 7:00PM MYT (闭市后)
   workflow_dispatch:  # 手动触发按钮
 
 jobs:
   report:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout Repository
@@ -26,11 +24,14 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sudo apt-get -y install libfreetype6  # 修复Matplotlib字体问题
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Main Script
+      - name: Run Stock Analysis
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          STOCK_LIST: ${{ secrets.STOCK_LIST }}  # 格式: "5255.KL,0209.KL,5819.KL"
         run: python main.py
