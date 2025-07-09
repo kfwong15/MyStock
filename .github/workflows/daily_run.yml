@@ -1,34 +1,29 @@
-name: Run Stock Bot Every Day
+name: MyStock 每日运行
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天 00:00 UTC（即马来西亚 8AM）
-  workflow_dispatch:      # 手动触发
+    - cron: '30 1 * * 1-5'   # MYT 9:30 AM（UTC 1:30 AM）
+    - cron: '40 5 * * 1-5'   # MYT 1:40 PM（UTC 5:40 AM）
+    - cron: '0 11 * * 1-5'   # MYT 7:00 PM（UTC 11:00 AM）
+  workflow_dispatch:        # 支持手动执行
 
 jobs:
-  build:
+  run-stock-bot:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
+      - name: 拉取代码
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: 设置 Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: Create config.json
-      run: |
-        echo '{
-          "bot_token": "${{ secrets.TG_BOT_TOKEN }}",
-          "chat_id": "${{ secrets.TG_CHAT_ID }}"
-        }' > config.json
-
-    - name: Run Stock Bot
-      run: python main.py
+      - name: 执行主程序
+        run: python main.py
