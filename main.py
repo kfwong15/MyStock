@@ -6,22 +6,19 @@ import matplotlib
 import pandas as pd
 import requests
 
-# 设置中文字体避免警告
+# 设置中文字体，避免缺字警告
 matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Arial Unicode MS']
 matplotlib.rcParams['axes.unicode_minus'] = False
 
-# 读取 Telegram 配置（通过 GitHub Secrets 设置）
+# 从 GitHub Secrets 或环境变量中获取 Telegram 令牌和聊天 ID
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
-# 股票列表（你可以继续增加）
+# 股票列表
 stock_list = ["5255.KL", "0209.KL"]
 
-# 设置图表保存目录
+# 创建保存图表的目录
 os.makedirs("charts", exist_ok=True)
-
-# 获取今天日期
-today = datetime.date.today().strftime("%Y-%m-%d")
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
@@ -42,8 +39,7 @@ def send_telegram_photo(photo_path, caption=""):
     return response.json()
 
 def fetch_news_placeholder(stock_code):
-    # 你可以改成真实爬虫或 API 采集
-    return f"暂无重要新闻。"
+    return "暂无重要新闻。"
 
 def analyze_stock(stock):
     print(f"📈 抓取 {stock} 的数据...")
@@ -54,15 +50,18 @@ def analyze_stock(stock):
         return
 
     df["MA5"] = df["Close"].rolling(window=5).mean()
-    latest = df.iloc[-1]
-    yesterday = df.iloc[-2]
+    latest = df.iloc[[-1]]
+    yesterday = df.iloc[[-2]]
 
-    # 使用 .iloc[0] 避免 FutureWarning
-    open_price = round(float(latest["Open"]), 3)
-    close_price = round(float(latest["Close"]), 3)
+    try:
+        open_price = round(float(latest["Open"].item()), 3)
+        close_price = round(float(latest["Close"].item()), 3)
+    except:
+        open_price = round(latest["Open"].values[0], 3)
+        close_price = round(latest["Close"].values[0], 3)
 
     change = close_price - open_price
-    percent_change = round(change / open_price * 100, 2)
+    percent_change = round(change / open_price * 100, 2) if open_price != 0 else 0.0
 
     if change > 0:
         arrow = "📈 上涨"
@@ -74,19 +73,22 @@ def analyze_stock(stock):
         arrow = "➖ 无涨跌"
         reason = "今日股价稳定，缺乏波动。"
 
-    ma5_today = latest["MA5"]
-    ma5_yesterday = yesterday["MA5"]
+    try:
+        ma5_today = float(latest["MA5"].item())
+        ma5_yesterday = float(yesterday["MA5"].item())
+    except:
+        ma5_today = latest["MA5"].values[0]
+        ma5_yesterday = yesterday["MA5"].values[0]
+
     trend_note = ""
-    if not pd.isna(ma5_today) and not pd.isna(ma5_yesterday):
+    if pd.notna(ma5_today) and pd.notna(ma5_yesterday):
         if ma5_today > ma5_yesterday:
             trend_note = "5日均线走高，短期上升趋势。"
         elif ma5_today < ma5_yesterday:
             trend_note = "5日均线下滑，短期承压。"
 
-    # 新闻摘要（你可以替换成真实 API 或爬虫）
     news_text = fetch_news_placeholder(stock)
 
-    # 输出分析文本
     message = (
         f"📊 *{stock} 股票走势汇报*\n"
         f"开市价：RM {open_price:.3f}\n"
@@ -117,7 +119,7 @@ def analyze_stock(stock):
 
     res = send_telegram_photo(filename)
     if res.get("ok"):
-        print(f"✅ 已发送图表至 Telegram")
+        print("✅ 已发送图表至 Telegram")
     else:
         print(f"❌ 发送失败：{res}")
 
