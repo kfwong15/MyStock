@@ -2,50 +2,64 @@ import os
 import requests
 from flask import Flask, request
 
-TELEGRAM_TOKEN = os.getenv("TG_BOT_TOKEN")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-
 app = Flask(__name__)
 
-# --- DeepSeek Chat Completion ---
-def ask_deepseek(question):
+# 从环境变量读取配置（安全）
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+# 👇 DeepSeek AI 聊天接口
+def ask_deepseek(message):
+    url = "https://api.deepseek.com/chat/completions"
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
         "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": "你是一个股票和财经分析专家。"},
-            {"role": "user", "content": question}
-        ]
+        "messages": [{"role": "user", "content": message}],
+        "temperature": 0.7
     }
-    r = requests.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=payload)
-    return r.json().get("choices", [{}])[0].get("message", {}).get("content", "⚠️ 无法获取 DeepSeek 回答。")
 
-# --- Telegram Bot 接收 Webhook ---
-@app.route(f"/webhook", methods=["POST"])
-def telegram_webhook():
-    data = request.json
-    message = data.get("message", {})
-    chat_id = message.get("chat", {}).get("id")
-    text = message.get("text", "")
+    response = requests.post(url, headers=headers, json=payload)
+    if response.ok:
+        return response.json()["choices"][0]["message"]["content"].strip()
+    else:
+        return f"⚠️ DeepSeek 请求失败：{response.text}"
 
-    if text.startswith("/ask"):
-        question = text.replace("/ask", "").strip()
-        if question:
-            answer = ask_deepseek(question)
-        else:
-            answer = "❓ 请提供你想问的问题，例如：/ask 马来西亚股市前景如何？"
-        send_telegram_message(chat_id, answer)
+# 👇 处理来自 Telegram 的消息
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    if "message" in data and "text" in data["message"]:
+        chat_id = data["message"]["chat"]["id"]
+        user_msg = data["message"]["text"]
 
-    return {"ok": True}
+        # 使用 DeepSeek 回应
+        reply = ask_deepseek(user_msg)
 
-# --- 发信息到 Telegram ---
-def send_telegram_message(chat_id, text):
-    requests.post(f"{API_URL}/sendMessage", data={"chat_id": chat_id, "text": text})
+        # 发回 Telegram
+        send_message(chat_id, reply)
+    return "OK"
 
-# --- 本地测试启动 Flask ---
+# 👇 用于向 Telegram 发消息
+def send_message(chat_id, text):
+    url = f"{TG_API}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    requests.post(url, json=payload)
+
+# 👇 启动时自动设置 webhook（可选）
+@app.route("/", methods=["GET"])
+def index():
+    if BOT_TOKEN and WEBHOOK_URL:
+        r = requests.get(f"{TG_API}/setWebhook?url={WEBHOOK_URL}/webhook")
+        return f"Webhook set: {r.text}"
+    return "Bot is running."
+
+# 👇 Render 部署入口
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
