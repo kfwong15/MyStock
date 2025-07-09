@@ -203,21 +203,26 @@ def generate_html_report(stock, data, news_text, sentiment_summary, chart_path):
     """
     
     # 保存HTML文件
+    os.makedirs("reports", exist_ok=True)
     html_path = f"reports/{stock_name}_report.html"
-    with open(html_path, "w") as f:
+    with open(html_path, "w", encoding="utf-8") as f:
         f.write(html_content)
     
     return html_path
 
 # 发送邮件报告
 def send_email_report(subject, html_path, chart_path):
+    if not EMAIL_USER or not EMAIL_PASS or not EMAIL_RECIPIENT:
+        print("⚠️ 邮件发送失败：缺少邮件配置")
+        return
+    
     msg = MIMEMultipart("related")
     msg["Subject"] = subject
     msg["From"] = EMAIL_USER
     msg["To"] = EMAIL_RECIPIENT
     
     # 添加HTML内容
-    with open(html_path, "r") as f:
+    with open(html_path, "r", encoding="utf-8") as f:
         html_content = f.read()
     msg.attach(MIMEText(html_content, "html"))
     
@@ -236,6 +241,46 @@ def send_email_report(subject, html_path, chart_path):
         print(f"✅ 邮件已发送: {subject}")
     except Exception as e:
         print(f"❌ 邮件发送失败: {str(e)}")
+
+# 发送Telegram图片
+def send_telegram_photo(photo_path, caption=""):
+    if not bot_token or not chat_id:
+        print("⚠️ Telegram发送失败：缺少配置")
+        return
+    
+    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+    try:
+        with open(photo_path, "rb") as photo_file:
+            files = {"photo": photo_file}
+            data = {"chat_id": chat_id, "caption": caption}
+            response = requests.post(url, files=files, data=data)
+            if response.status_code == 200:
+                print(f"✅ Telegram图片已发送：{photo_path}")
+            else:
+                print(f"❌ Telegram发送失败：{response.text}")
+    except Exception as e:
+        print(f"❌ Telegram图片发送错误：{str(e)}")
+
+# 发送Telegram消息
+def send_telegram_message(message):
+    if not bot_token or not chat_id:
+        print("⚠️ Telegram消息发送失败：缺少配置")
+        return
+    
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    try:
+        data = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        response = requests.post(url, data=data)
+        if response.status_code == 200:
+            print("✅ Telegram消息发送成功")
+        else:
+            print(f"❌ Telegram消息发送失败: {response.text}")
+    except Exception as e:
+        print(f"❌ Telegram消息发送错误：{str(e)}")
 
 # 主函数
 def main():
@@ -310,10 +355,14 @@ def main():
             else:
                 trend_advice += "当前股价在20日均线下方，显示中期趋势向下。"
                 
-            if ma5 > ma20 and (prev_day is not None and prev_day["MA5"].iloc[0] < prev_day["MA20"].iloc[0]):
-                trend_advice += " ⚠️ MA5金叉MA20，短线买入信号！"
-            elif ma5 < ma20 and (prev_day is not None and prev_day["MA5"].iloc[0] > prev_day["MA20"].iloc[0]):
-                trend_advice += " ⚠️ MA5死叉MA20，短线卖出信号！"
+            if prev_day is not None:
+                prev_ma5 = float(prev_day["MA5"].iloc[0])
+                prev_ma20 = float(prev_day["MA20"].iloc[0])
+                
+                if ma5 > ma20 and prev_ma5 < prev_ma20:
+                    trend_advice += " ⚠️ MA5金叉MA20，短线买入信号！"
+                elif ma5 < ma20 and prev_ma5 > prev_ma20:
+                    trend_advice += " ⚠️ MA5死叉MA20，短线卖出信号！"
                 
             if rsi > 70:
                 trend_advice += " ⚠️ RSI超买(>70)，警惕回调风险！"
@@ -328,7 +377,8 @@ def main():
                 ticker = yf.Ticker(stock)
                 news_items = ticker.news
                 news_text, sentiment_summary = analyze_news_sentiment(news_items)
-            except:
+            except Exception as e:
+                print(f"❌ 新闻获取失败: {str(e)}")
                 news_text = "\n📰 今日相关新闻：获取失败。"
                 sentiment_summary = ""
             
@@ -357,6 +407,7 @@ def main():
             
             # 生成HTML报告
             html_path = generate_html_report(stock, stock_data, news_text, sentiment_summary, chart_path)
+            print(f"✅ HTML报告已生成：{html_path}")
             
             # 发送邮件报告
             stock_name = stock.replace(".KL", "")
@@ -377,23 +428,6 @@ def main():
             error_msg = f"⚠️ 股票报告错误: {stock}\n错误详情: {str(e)}"
             send_telegram_message(error_msg)
 
-# 发送Telegram消息
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    data = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "HTML"
-    }
-    response = requests.post(url, data=data)
-    if response.status_code == 200:
-        print("✅ 消息发送成功")
-    else:
-        print(f"❌ 消息发送失败: {response.text}")
-
-# 发送Telegram图片（与之前相同）
-def send_telegram_photo(photo_path, caption=""):
-    # ... 保持原有实现不变 ...
-
+# 确保这个部分在文件末尾且没有缩进
 if __name__ == "__main__":
     main()
