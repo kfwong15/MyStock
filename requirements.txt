@@ -3,4 +3,3 @@ pandas
 matplotlib
 requests
 pandas_ta
-numpy==1.24.4
