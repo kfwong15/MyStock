@@ -25,5 +25,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install yfinance matplotlib pandas requests
 
-      - name: Run main.py
+      - name: Create charts folder
+        run: mkdir -p charts
+
+      - name: Run stock report script
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
