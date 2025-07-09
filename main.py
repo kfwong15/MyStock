@@ -32,8 +32,8 @@ my_stocks = ["5255.KL", "0209.KL"]
 for stock in my_stocks:
     print(f"📈 抓取 {stock} 的数据...")
 
-    # 下载近5天数据，用于分析最新行情
-    df = yf.download(stock, period="5d", interval="1d")
+    # 下载近5天数据，用于当日分析
+    df = yf.download(stock, period="5d", interval="1d", auto_adjust=False)
 
     if df.empty:
         print(f"⚠️ 没有抓到 {stock} 的数据")
@@ -42,9 +42,9 @@ for stock in my_stocks:
     df['MA5'] = df['Close'].rolling(window=5).mean()
     df['MA20'] = df['Close'].rolling(window=20).mean()
 
-    latest = df.iloc[-1]  # 最新一天
-    open_price = latest["Open"]
-    close_price = latest["Close"]
+    latest = df.iloc[-1]  # 最新一天数据
+    open_price = float(latest["Open"])
+    close_price = float(latest["Close"])
     change = close_price - open_price
     pct_change = (change / open_price) * 100
 
@@ -66,8 +66,8 @@ for stock in my_stocks:
         f"说明：{reason}"
     )
 
-    # 下载 60 天数据绘图
-    hist_df = yf.download(stock, period="60d", interval="1d")
+    # 下载 60 天数据用于画图
+    hist_df = yf.download(stock, period="60d", interval="1d", auto_adjust=False)
     hist_df['MA5'] = hist_df['Close'].rolling(window=5).mean()
     hist_df['MA20'] = hist_df['Close'].rolling(window=20).mean()
 
@@ -82,12 +82,11 @@ for stock in my_stocks:
     plt.legend()
     plt.grid(True)
 
-    # 保存图像
     filename = f"charts/{stock.replace('.KL', '')}_chart.png"
     plt.savefig(filename)
     plt.close()
 
     print(f"✅ 图表已生成：{filename}")
 
-    # 推送到 Telegram（附说明）
+    # 推送图表 + 分析到 Telegram
     send_telegram_photo(bot_token, chat_id, filename, caption=caption)
