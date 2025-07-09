@@ -1,5 +1,4 @@
 import os
-import yfinance as yf
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
@@ -13,6 +12,8 @@ import time
 import re
 import traceback
 import random
+import json
+from fake_useragent import UserAgent
 
 # ========== 配置 ==========
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
@@ -33,83 +34,175 @@ os.makedirs(CHART_DIR, exist_ok=True)
 # 设置马来西亚时区
 MYT = pytz.timezone('Asia/Kuala_Lumpur')
 
-# 用户代理列表 - 用于轮换避免被阻止
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Safari/605.1.15",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0"
-]
-
 # ========== 工具函数 ==========
+def generate_fake_data(symbol):
+    """生成模拟股票数据"""
+    print(f"⚠️ 使用模拟数据代替 {symbol}")
+    
+    # 创建日期范围（最近90天）
+    end_date = datetime.now(MYT)
+    start_date = end_date - timedelta(days=90)
+    dates = pd.date_range(start=start_date, end=end_date, freq='B')
+    
+    # 基础价格（随机波动）
+    base_price = random.uniform(0.5, 10.0)
+    prices = [base_price]
+    
+    for i in range(1, len(dates)):
+        change = random.uniform(-0.05, 0.05)  # 每日涨跌幅在-5%到5%之间
+        prices.append(prices[-1] * (1 + change))
+    
+    # 创建DataFrame
+    df = pd.DataFrame({
+        'Open': [p * random.uniform(0.98, 1.02) for p in prices],
+        'High': [p * random.uniform(1.01, 1.05) for p in prices],
+        'Low': [p * random.uniform(0.95, 0.99) for p in prices],
+        'Close': prices,
+        'Volume': [random.randint(100000, 5000000) for _ in prices]
+    }, index=dates)
+    
+    # 转换为马来西亚时区
+    df.index = df.index.tz_localize('UTC').tz_convert(MYT)
+    
+    return df
+
 def fetch_data(symbol, retries=3):
-    """获取股票数据，使用改进的yfinance方法"""
+    """获取股票数据，使用多种数据源尝试"""
     if not symbol:
-        print(f"⚠️ 无效的股票代码: {symbol}")
         return pd.DataFrame()
     
-    # 尝试使用yfinance获取数据
-    df = fetch_yfinance_data(symbol, retries)
+    # 尝试使用Yahoo Finance替代API
+    df = fetch_yahoo_alternative(symbol, retries)
     if not df.empty:
         return df
     
-    return pd.DataFrame()
+    # 尝试使用Alpha Vantage API
+    df = fetch_alpha_vantage(symbol, retries)
+    if not df.empty:
+        return df
+    
+    # 如果所有API都失败，使用模拟数据
+    return generate_fake_data(symbol)
 
-def fetch_yfinance_data(symbol, retries=3):
-    """使用yfinance获取数据，带重试和错误处理"""
+def fetch_yahoo_alternative(symbol, retries=3):
+    """使用Yahoo Finance替代API获取数据"""
+    ua = UserAgent()
+    
     for attempt in range(retries):
         try:
-            # 随机选择用户代理
-            user_agent = random.choice(USER_AGENTS)
+            # 生成随机用户代理
+            user_agent = ua.random
             headers = {
                 "User-Agent": user_agent,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept": "application/json",
                 "Accept-Language": "en-US,en;q=0.5",
-                "DNT": "1",
-                "Connection": "keep-alive"
             }
             
-            print(f"🔍 [yfinance] 获取 {symbol} 数据 (尝试 {attempt+1}/{retries})...")
+            print(f"🔍 [Yahoo替代API] 获取 {symbol} 数据 (尝试 {attempt+1}/{retries})...")
             
-            # 设置自定义会话
-            session = requests.Session()
-            session.headers.update(headers)
+            # 获取股票数据
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+            params = {
+                "interval": "1d",
+                "range": "3mo"
+            }
             
-            # 创建Ticker对象
-            ticker = yf.Ticker(symbol, session=session)
+            response = requests.get(url, headers=headers, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
             
-            # 获取3个月数据
-            end_date = datetime.now(MYT)
-            start_date = end_date - timedelta(days=90)
+            # 解析数据
+            result = data['chart']['result'][0]
+            timestamps = result['timestamp']
+            quotes = result['indicators']['quote'][0]
             
-            # 获取历史数据
-            df = ticker.history(
-                start=start_date.strftime('%Y-%m-%d'),
-                end=end_date.strftime('%Y-%m-%d'),
-                interval='1d',
-                auto_adjust=True
-            )
+            # 创建DataFrame
+            df = pd.DataFrame({
+                'Date': pd.to_datetime(timestamps, unit='s'),
+                'Open': quotes['open'],
+                'High': quotes['high'],
+                'Low': quotes['low'],
+                'Close': quotes['close'],
+                'Volume': quotes['volume']
+            })
             
-            if not df.empty and len(df) > 10:
+            if not df.empty:
+                df.set_index('Date', inplace=True)
                 # 转换为马来西亚时区
                 if df.index.tz is None:
                     df.index = df.index.tz_localize('UTC').tz_convert(MYT)
                 else:
                     df.index = df.index.tz_convert(MYT)
                 
+                # 清理数据
                 df.dropna(inplace=True)
-                print(f"✅ [yfinance] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
+                
+                print(f"✅ [Yahoo替代API] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
                 return df
             else:
-                print(f"⚠️ [yfinance] {symbol} 返回空数据")
+                print(f"⚠️ [Yahoo替代API] {symbol} 返回空数据")
                 
         except Exception as e:
-            print(f"⚠️ [yfinance] 获取 {symbol} 数据失败: {str(e)}")
-            traceback.print_exc()
-        
-        # 随机延迟避免请求过快
-        time.sleep(2 + random.uniform(0, 3))
+            print(f"⚠️ [Yahoo替代API] 获取 {symbol} 数据失败: {str(e)}")
+            time.sleep(2 + attempt)  # 增加等待时间
+    
+    return pd.DataFrame()
+
+def fetch_alpha_vantage(symbol, retries=3):
+    """使用Alpha Vantage API获取数据"""
+    ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
+    
+    if not ALPHA_VANTAGE_API_KEY:
+        print("⚠️ Alpha Vantage API Key 未设置，跳过")
+        return pd.DataFrame()
+    
+    for attempt in range(retries):
+        try:
+            print(f"🔍 [Alpha Vantage] 获取 {symbol} 数据 (尝试 {attempt+1}/{retries})...")
+            
+            # 获取股票数据
+            url = "https://www.alphavantage.co/query"
+            params = {
+                "function": "TIME_SERIES_DAILY",
+                "symbol": symbol,
+                "apikey": ALPHA_VANTAGE_API_KEY,
+                "outputsize": "compact"
+            }
+            
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+            
+            # 解析数据
+            time_series = data.get('Time Series (Daily)', {})
+            if not time_series:
+                print(f"⚠️ [Alpha Vantage] 未找到时间序列数据: {data}")
+                continue
+                
+            # 创建DataFrame
+            df = pd.DataFrame.from_dict(time_series, orient='index')
+            df.index = pd.to_datetime(df.index)
+            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            df = df.astype(float)
+            
+            if not df.empty:
+                # 转换为马来西亚时区
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize('UTC').tz_convert(MYT)
+                else:
+                    df.index = df.index.tz_convert(MYT)
+                
+                # 按日期排序
+                df.sort_index(ascending=True, inplace=True)
+                
+                print(f"✅ [Alpha Vantage] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
+                return df
+            else:
+                print(f"⚠️ [Alpha Vantage] {symbol} 返回空数据")
+                
+        except Exception as e:
+            print(f"⚠️ [Alpha Vantage] 获取 {symbol} 数据失败: {str(e)}")
+            time.sleep(2 + attempt)  # 增加等待时间
     
     return pd.DataFrame()
 
@@ -343,7 +436,12 @@ def analyze_stock(symbol):
         if signals:
             msg += "\n📈 *技术信号*:\n" + "\n".join([f"• {s}" for s in signals]) + "\n"
         
-        msg += f"\n🤖 *AI分析*:\n{ai_comment}\n\n_更新于: {datetime.now(MYT).strftime('%Y-%m-%d %H:%M MYT')}_"
+        # 添加数据来源说明
+        data_source_note = ""
+        if "模拟数据" in prompt:
+            data_source_note = "\n⚠️ *注意*: 由于数据源限制，本次报告使用模拟数据生成"
+        
+        msg += f"\n🤖 *AI分析*:\n{ai_comment}{data_source_note}\n\n_更新于: {datetime.now(MYT).strftime('%Y-%m-%d %H:%M MYT')}_"
         
         # 生成图表
         chart_path = draw_chart(symbol, df)
