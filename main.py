@@ -13,7 +13,6 @@ import re
 import traceback
 import random
 import json
-from fake_useragent import UserAgent
 
 # ========== 配置 ==========
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
@@ -33,6 +32,20 @@ os.makedirs(CHART_DIR, exist_ok=True)
 
 # 设置马来西亚时区
 MYT = pytz.timezone('Asia/Kuala_Lumpur')
+
+# 用户代理列表 - 用于轮换避免被阻止
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.3",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.1",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.5; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (iPad; CPU OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.165 Mobile Safari/537.3",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0."
+]
 
 # ========== 工具函数 ==========
 def generate_fake_data(symbol):
@@ -86,12 +99,10 @@ def fetch_data(symbol, retries=3):
 
 def fetch_yahoo_alternative(symbol, retries=3):
     """使用Yahoo Finance替代API获取数据"""
-    ua = UserAgent()
-    
     for attempt in range(retries):
         try:
-            # 生成随机用户代理
-            user_agent = ua.random
+            # 从用户代理列表中随机选择
+            user_agent = random.choice(USER_AGENTS)
             headers = {
                 "User-Agent": user_agent,
                 "Accept": "application/json",
