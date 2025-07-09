@@ -1,82 +1,82 @@
 import os
-import datetime
-import requests
-import matplotlib.pyplot as plt
-import pandas as pd
 import yfinance as yf
+import pandas as pd
 import pandas_ta as ta
+import matplotlib.pyplot as plt
+import requests
 
-# ====== 配置 ======
-STOCKS = ["5255.KL", "0209.KL"]
-CHART_FOLDER = "charts"
+# 设置环境变量
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
+# 股票列表
+stock_list = ["5255.KL", "0209.KL"]
 
-# ====== 工具函数 ======
 def fetch_stock_data(symbol):
-    df = yf.download(symbol, period="3mo", interval="1d")
+    print(f"📈 抓取 {symbol} 的数据...")
+    df = yf.download(symbol, period="3mo", interval="1d", group_by="column")
+    if df.empty:
+        return None
     df.dropna(inplace=True)
 
-    df["MA5"] = df["Close"].rolling(window=5).mean()
-    df["MA20"] = df["Close"].rolling(window=20).mean()
-
-    df.ta.macd(close="Close", fast=12, slow=26, signal=9, append=True)
+    # 技术指标
     df.ta.rsi(length=14, append=True)
+    df.ta.macd(append=True)
+    df["MA5"] = df["Close"].rolling(5).mean()
+    df["MA20"] = df["Close"].rolling(20).mean()
 
     return df
 
+def analyze(df):
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
 
-def draw_chart(df, symbol):
-    plt.figure(figsize=(10, 5))
-    plt.plot(df["Close"], label="收盘价", color="blue")
-    plt.plot(df["MA5"], label="MA5", linestyle="--", color="green")
-    plt.plot(df["MA20"], label="MA20", linestyle="--", color="orange")
-    plt.title(f"{symbol} 股票走势图")
+    summary = ""
+    macd_cross = latest["MACD_12_26_9"] > latest["MACDs_12_26_9"] and prev["MACD_12_26_9"] < prev["MACDs_12_26_9"]
+    rsi_value = latest["RSI_14"]
+
+    if macd_cross:
+        summary += "🟢 MACD 金叉，或有上升动能。\n"
+    if rsi_value > 70:
+        summary += "🔴 RSI 超买，可能回调。\n"
+    elif rsi_value < 30:
+        summary += "🔵 RSI 超卖，可能反弹。\n"
+
+    return summary.strip()
+
+def draw_chart(symbol, df):
+    plt.figure(figsize=(10, 4))
+    df.tail(30)["Close"].plot(label="收盘价", color="blue")
+    df.tail(30)["MA5"].plot(label="MA5", linestyle="--", color="orange")
+    df.tail(30)["MA20"].plot(label="MA20", linestyle="--", color="green")
+    plt.title(f"{symbol} 最近走势")
     plt.legend()
-    plt.grid()
-    os.makedirs(CHART_FOLDER, exist_ok=True)
-    path = f"{CHART_FOLDER}/{symbol.replace('.KL','')}_chart.png"
-    plt.savefig(path)
-    plt.close()
-    return path
+    plt.tight_layout()
 
+    chart_path = f"charts/{symbol}_chart.png"
+    os.makedirs("charts", exist_ok=True)
+    plt.savefig(chart_path)
+    plt.close()
+    return chart_path
 
 def send_telegram_message(text, image_path=None):
-    send_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-    photo_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+    data = {"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "Markdown"}
 
-    if image_path:
-        with open(image_path, "rb") as img:
-            response = requests.post(
-                photo_url,
-                data={"chat_id": TG_CHAT_ID, "caption": text},
-                files={"photo": img}
-            )
+    if image_path and os.path.exists(image_path):
+        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
+        with open(image_path, "rb") as f:
+            files = {"photo": f}
+            data = {"chat_id": TG_CHAT_ID, "caption": text}
+            response = requests.post(url, data=data, files=files)
     else:
-        response = requests.post(
-            send_url,
-            data={"chat_id": TG_CHAT_ID, "text": text}
-        )
-    return response.json()
+        response = requests.post(url, data=data)
+    
+    if not response.ok:
+        print("❌ 发送失败：", response.text)
 
-
-def get_trend_description(open_price, close_price):
-    diff = close_price - open_price
-    pct = (diff / open_price) * 100
-    if diff > 0:
-        return f"📈 上涨 RM {diff:.3f}（{pct:.2f}%）"
-    elif diff < 0:
-        return f"📉 下跌 RM {abs(diff):.3f}（{abs(pct):.2f}%）"
-    else:
-        return f"➖ 无涨跌 RM {diff:.3f}（0.00%）"
-
-
-def ask_deepseek(prompt):
-    if not DEEPSEEK_API_KEY:
-        return "❌ DeepSeek API Key 未设置"
-
+def ask_deepseek(message):
     url = "https://api.deepseek.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -85,64 +85,44 @@ def ask_deepseek(prompt):
     data = {
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": "你是一位马来西亚股票分析师"},
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": "你是一个专业股票分析师，使用简短中文回复。"},
+            {"role": "user", "content": message}
         ]
     }
-
     try:
-        res = requests.post(url, json=data, headers=headers, timeout=15)
+        res = requests.post(url, headers=headers, json=data)
         res.raise_for_status()
         return res.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        return f"❌ DeepSeek API 错误：{str(e)}"
+        return f"❌ DeepSeek API 错误：{e}"
 
-
-# ====== 主程序 ======
-for symbol in STOCKS:
-    print(f"📈 抓取 {symbol} 的数据...")
-    df = fetch_stock_data(symbol)
+def generate_report(symbol, df):
     latest = df.iloc[-1]
     open_price = latest["Open"]
     close_price = latest["Close"]
-    trend = get_trend_description(open_price, close_price)
+    change = close_price - open_price
+    percent = (change / open_price) * 100 if open_price != 0 else 0
+    emoji = "📈" if change > 0 else "📉" if change < 0 else "➖"
 
-    ma5 = latest["MA5"]
-    ma20 = latest["MA20"]
-    rsi = latest["RSI_14"]
-    macd = latest["MACD_12_26_9"]
-    signal = latest["MACDs_12_26_9"]
+    summary = f"📊 {symbol} 股票简报\n"
+    summary += f"开市价：RM {open_price:.3f}\n"
+    summary += f"收市价：RM {close_price:.3f}\n"
+    summary += f"涨跌：{emoji} {'上涨' if change > 0 else '下跌' if change < 0 else '无涨跌'} RM {abs(change):.3f}（{abs(percent):.2f}%）\n\n"
 
-    tips = []
+    summary += analyze(df) + "\n\n"
 
-    if close_price > ma20:
-        tips.append("⚠️ 当前股价已上穿 MA20，有短期上升动能。")
-    if macd > signal:
-        tips.append("🟢 MACD 金叉，或有上升动能。")
-    if rsi > 70:
-        tips.append("📶 RSI > 70，超买区，或将回调。")
-    elif rsi < 30:
-        tips.append("📉 RSI < 30，超卖区，或有反弹机会。")
+    # DeepSeek
+    ai_prompt = f"股票代码 {symbol} 今日收盘价 RM{close_price:.3f}，开盘价 RM{open_price:.3f}，你怎么看？"
+    ai_response = ask_deepseek(ai_prompt)
+    summary += f"🤖 DeepSeek 分析：\n{ai_response}"
 
-    prompt = f"请分析 {symbol} 股票当前走势（开盘价 {open_price:.3f}, 收盘价 {close_price:.3f}, MA20 {ma20:.3f}, RSI {rsi:.1f}, MACD {macd:.3f}）并给出明日操作建议。"
-    deepseek_summary = ask_deepseek(prompt)
+    return summary
 
-    message = f"""📊 {symbol} 股票简报
-开市价：RM {open_price:.3f}
-收市价：RM {close_price:.3f}
-涨跌：{trend}
-
-{chr(10).join(tips)}
-
-🤖 DeepSeek 分析：
-{deepseek_summary}
-"""
-
-    chart_path = draw_chart(df, symbol)
-    print("✅ 图表已生成：", chart_path)
-
-    result = send_telegram_message(message, chart_path)
-    if result.get("ok"):
-        print("✅ 消息已发送至 Telegram")
-    else:
-        print("❌ 发送失败：", result)
+# 主程序
+for symbol in stock_list:
+    df = fetch_stock_data(symbol)
+    if df is None:
+        continue
+    chart_path = draw_chart(symbol, df)
+    message = generate_report(symbol, df)
+    send_telegram_message(message, chart_path)
