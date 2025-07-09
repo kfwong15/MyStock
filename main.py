@@ -2,14 +2,17 @@ import os
 import yfinance as yf
 import pandas as pd
 import matplotlib
-matplotlib.use('Agg')  # 无头环境必须
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import requests
 import numpy as np
 import pytz
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 import re
+import json
+import traceback
 
 # ========== 配置 ==========
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
@@ -31,41 +34,112 @@ os.makedirs(CHART_DIR, exist_ok=True)
 MYT = pytz.timezone('Asia/Kuala_Lumpur')
 
 # ========== 工具函数 ==========
-def fetch_data(symbol, retries=2):
-    """获取股票数据，带重试机制"""
+def fetch_data(symbol, retries=3):
+    """获取股票数据，带重试机制和备用数据源"""
     if not symbol or not re.match(r"^[A-Z0-9]+\.[A-Z]+$", symbol):
         print(f"⚠️ 无效的股票代码: {symbol}")
         return pd.DataFrame()
     
+    # 尝试使用 yfinance 获取数据
+    df = fetch_with_yfinance(symbol, retries)
+    if not df.empty:
+        return df
+    
+    # 如果 yfinance 失败，尝试备用 API
+    print(f"⚠️ yfinance 获取 {symbol} 失败，尝试备用数据源...")
+    return fetch_with_backup_api(symbol)
+
+def fetch_with_yfinance(symbol, retries=3):
+    """使用 yfinance 获取数据"""
     for attempt in range(retries):
         try:
-            print(f"🔍 获取 {symbol} 数据 (尝试 {attempt+1}/{retries})...")
-            df = yf.download(
-                symbol, 
-                period="3mo", 
-                interval="1d", 
-                auto_adjust=True,
-                progress=False,
-                threads=True
+            print(f"🔍 [yfinance] 获取 {symbol} 数据 (尝试 {attempt+1}/{retries})...")
+            
+            # 创建 Ticker 对象并获取历史数据
+            ticker = yf.Ticker(symbol)
+            
+            # 获取3个月数据
+            end_date = datetime.now(MYT)
+            start_date = end_date - timedelta(days=90)
+            
+            df = ticker.history(
+                start=start_date.strftime('%Y-%m-%d'),
+                end=end_date.strftime('%Y-%m-%d'),
+                interval='1d',
+                auto_adjust=True
             )
             
             if not df.empty and len(df) > 10:
                 # 转换为马来西亚时区
                 df.index = df.index.tz_convert(MYT)
                 df.dropna(inplace=True)
-                print(f"✅ 成功获取 {symbol} 数据 ({len(df)} 条记录)")
+                print(f"✅ [yfinance] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
                 return df
             else:
-                print(f"⚠️ {symbol} 返回空数据")
+                print(f"⚠️ [yfinance] {symbol} 返回空数据")
         except Exception as e:
-            print(f"⚠️ 获取 {symbol} 数据失败: {str(e)}")
+            print(f"⚠️ [yfinance] 获取 {symbol} 数据失败: {str(e)}")
+            traceback.print_exc()
+            time.sleep(2)  # 等待后重试
     
     return pd.DataFrame()
 
+def fetch_with_backup_api(symbol):
+    """使用备用API获取马来西亚股票数据"""
+    try:
+        print(f"🔍 [备用API] 获取 {symbol} 数据...")
+        
+        # 移除.KL后缀
+        symbol_code = symbol.replace('.KL', '')
+        
+        # 使用马来西亚交易所API
+        url = f"https://www.malaysiastock.biz/StockChart.aspx?type=C&value={symbol_code}"
+        
+        # 设置请求头
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": f"https://www.malaysiastock.biz/Stock-Chart.aspx?symbol={symbol_code}"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        # 解析响应数据
+        data = response.json()
+        
+        # 创建DataFrame
+        df = pd.DataFrame({
+            'Date': pd.to_datetime(data['t'], 
+            'Open': data['o'],
+            'High': data['h'],
+            'Low': data['l'],
+            'Close': data['c'],
+            'Volume': data['v']
+        })
+        
+        # 设置日期为索引
+        df.set_index('Date', inplace=True)
+        
+        # 转换为马来西亚时区
+        df.index = df.index.tz_localize('UTC').tz_convert(MYT)
+        
+        if not df.empty:
+            print(f"✅ [备用API] 成功获取 {symbol} 数据 ({len(df)} 条记录)")
+            return df
+        else:
+            print(f"⚠️ [备用API] {symbol} 返回空数据")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        print(f"⚠️ [备用API] 获取 {symbol} 数据失败: {str(e)}")
+        traceback.print_exc()
+        return pd.DataFrame()
+
 def compute_indicators(df):
     """计算技术指标"""
-    if len(df) < 20:
-        print(f"⚠️ 数据不足 ({len(df)} 条)，无法计算完整指标")
+    if df.empty or len(df) < 5:
+        print(f"⚠️ 数据不足 ({len(df)} 条)，无法计算指标")
         return df
         
     # 移动平均线
@@ -222,7 +296,7 @@ def analyze_stock(symbol):
         pct = (diff / open_p) * 100 if open_p != 0 else 0
         trend = "📈 上涨" if diff > 0 else "📉 下跌" if diff < 0 else "➖ 平盘"
         last_trade_date = today.name.strftime('%Y-%m-%d')
-        volume = today["Volume"]
+        volume = today["Volume"] if "Volume" in today else 0
         
         # 生成技术信号
         signals = []
@@ -302,6 +376,7 @@ def analyze_stock(symbol):
     except Exception as e:
         error_msg = f"⚠️ 分析 {symbol} 时出错: {str(e)}"
         print(error_msg)
+        traceback.print_exc()
         return error_msg, None
 
 # ========== 主执行逻辑 ==========
@@ -315,6 +390,7 @@ def main():
         msg, chart_path = analyze_stock(symbol)
         if msg:
             send_to_telegram(msg, chart_path)
+        time.sleep(3)  # 避免API限流
     
     print(f"\n{'='*50}")
     print(f"✅ 分析完成! 已处理 {len(STOCK_LIST)} 只股票")
