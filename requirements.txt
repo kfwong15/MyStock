@@ -7,6 +7,6 @@ textblob
 pytz
 
 # Telegram Bot 依赖
-flask
+yfinance
+matplotlib
 requests
-python-dotenv
