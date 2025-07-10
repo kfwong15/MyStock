@@ -24,7 +24,7 @@ def send_telegram_photo(photo_path, caption=""):
 os.makedirs("charts", exist_ok=True)
 
 # 自选股列表
-my_stocks = ["5255.KL", "0209.KL"]
+my_stocks = ["5255.KL", "0209.KL", "1562.KL"]
 
 for stock in my_stocks:
     print(f"📈 抓取 {stock} 的数据...")
