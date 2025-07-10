@@ -23,29 +23,68 @@ EMAIL_RECIPIENT = os.getenv("EMAIL_RECIPIENT")
 # 马来西亚时区
 MYT = pytz.timezone('Asia/Kuala_Lumpur')
 
-# 移除 Webhook
 def remove_webhook(bot_token):
-    url = f"https://api.telegram.org/bot{bot_token}/deleteWebhook"
+    """彻底移除 Telegram webhook"""
+    delete_url = f"https://api.telegram.org/bot{bot_token}/deleteWebhook"
+    set_url = f"https://api.telegram.org/bot{bot_token}/setWebhook?url="
+    
+    print("🔄 尝试移除 webhook...")
     try:
-        response = requests.get(url)
+        # 方法1: 直接删除 webhook
+        response = requests.get(delete_url)
         if response.status_code == 200:
-            print("✅ Webhook 已成功移除")
+            print("✅ Webhook 已删除")
         else:
-            print(f"❌ 移除 webhook 失败: {response.text}")
+            print(f"⚠️ 删除 webhook 失败: {response.text}")
+        
+        # 方法2: 设置空 webhook URL
+        response = requests.get(set_url)
+        if response.status_code == 200:
+            print("✅ Webhook 已重置为空")
+        else:
+            print(f"⚠️ 重置 webhook 失败: {response.text}")
     except Exception as e:
         print(f"❌ 移除 webhook 时出错: {str(e)}")
 
+def check_webhook_status(bot_token):
+    """检查并打印 webhook 状态"""
+    url = f"https://api.telegram.org/bot{bot_token}/getWebhookInfo"
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            info = response.json().get("result", {})
+            status = "已设置" if info.get("url") else "未设置"
+            print(f"ℹ️ Webhook 状态: {status}")
+            print(f"   URL: {info.get('url')}")
+            print(f"   最后错误: {info.get('last_error_message')}")
+            return info
+        else:
+            print(f"❌ 无法获取 webhook 信息: {response.text}")
+    except Exception as e:
+        print(f"❌ 获取 webhook 信息时出错: {str(e)}")
+    return None
+
 # 主函数
 def main():
-    # 移除 webhook（如果存在）
+    # 确保 webhook 被移除
     if bot_token:
+        print("="*50)
+        print("🔧 检查并移除 Telegram webhook")
+        print("="*50)
         remove_webhook(bot_token)
+        webhook_info = check_webhook_status(bot_token)
+        
+        # 确保 webhook 被移除
+        if webhook_info and webhook_info.get("url"):
+            print("⚠️ Webhook 仍然存在，尝试强制移除...")
+            remove_webhook(bot_token)
+            check_webhook_status(bot_token)
     
-    # 其余代码保持不变...
+    # 创建目录
     os.makedirs("charts", exist_ok=True)
     os.makedirs("reports", exist_ok=True)
     
-    # ... [其余代码] ...
+    # 其余代码保持不变...
 
 # 技术指标计算
 def calculate_technical_indicators(df):
