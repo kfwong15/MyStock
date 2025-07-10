@@ -23,6 +23,30 @@ EMAIL_RECIPIENT = os.getenv("EMAIL_RECIPIENT")
 # 马来西亚时区
 MYT = pytz.timezone('Asia/Kuala_Lumpur')
 
+# 移除 Webhook
+def remove_webhook(bot_token):
+    url = f"https://api.telegram.org/bot{bot_token}/deleteWebhook"
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            print("✅ Webhook 已成功移除")
+        else:
+            print(f"❌ 移除 webhook 失败: {response.text}")
+    except Exception as e:
+        print(f"❌ 移除 webhook 时出错: {str(e)}")
+
+# 主函数
+def main():
+    # 移除 webhook（如果存在）
+    if bot_token:
+        remove_webhook(bot_token)
+    
+    # 其余代码保持不变...
+    os.makedirs("charts", exist_ok=True)
+    os.makedirs("reports", exist_ok=True)
+    
+    # ... [其余代码] ...
+
 # 技术指标计算
 def calculate_technical_indicators(df):
     # 移动平均线
