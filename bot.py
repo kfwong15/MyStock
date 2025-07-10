@@ -3,7 +3,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
-from flask import Flask
+from flask import Flask, request
 import threading
 
 # === Telegram Bot 配置 ===
@@ -36,11 +36,9 @@ def generate_stock_report(stock_code):
     df["MA5"] = df["Close"].rolling(window=5).mean()
     df["MA20"] = df["Close"].rolling(window=20).mean()
 
-    # 创建图表目录
     os.makedirs("charts", exist_ok=True)
     image_path = f"charts/{stock_code.replace('.KL','')}.png"
 
-    # 绘图
     plt.figure(figsize=(10, 5))
     plt.plot(df["Close"], label="收盘价", color="black")
     plt.plot(df["MA5"], label="MA5", color="blue")
@@ -54,7 +52,6 @@ def generate_stock_report(stock_code):
     plt.savefig(image_path)
     plt.close()
 
-    # 提取价格并生成说明
     try:
         latest = df.iloc[-1]
         open_price = float(latest["Open"])
@@ -75,21 +72,28 @@ def generate_stock_report(stock_code):
 
     send_telegram_photo(image_path, caption)
 
-# === 后台运行股票分析任务 ===
+# === 多个股票执行任务 ===
 def run_all_stocks():
     stock_list = ["5255.KL", "0209.KL"]
     for stock in stock_list:
         generate_stock_report(stock)
 
-# === 路由 ===
+# === 网页路由 ===
 @app.route("/")
 def index():
-    return "✅ MyStock Bot 正在运行。访问 /run 触发分析任务"
+    return "✅ MyStock Bot 正在运行。访问 /run 可手动触发分析任务。"
 
 @app.route("/run")
 def run_job():
     threading.Thread(target=run_all_stocks).start()
-    return "📊 股票分析任务已启动，图表将发送至 Telegram"
+    return "📊 股票分析任务已启动，结果将通过 Telegram 发送"
+
+# ✅ webhook 路由（用于 Telegram 推送消息）
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    print("📩 收到 Telegram 消息：", data)
+    return "OK"
 
 # === 启动服务器 ===
 if __name__ == "__main__":
