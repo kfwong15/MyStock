@@ -6,14 +6,14 @@ import requests
 from flask import Flask, request
 import threading
 
-# === Telegram Bot 配置 ===
-TG_BOT_TOKEN = "7976682927:AAHVwjcfg4fzP9Wu6wv0ue2LdPSzrmE6oE0"
-TG_CHAT_ID = "-1002721174982"
+# ========== 安全读取环境变量 ==========
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
+TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
-# === Flask 初始化 ===
+# ========== Flask 初始化 ==========
 app = Flask(__name__)
 
-# === 发送图片到 Telegram 群组 ===
+# ========== Telegram 发图 ==========
 def send_telegram_photo(photo_path, caption=""):
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
     with open(photo_path, "rb") as photo:
@@ -25,95 +25,139 @@ def send_telegram_photo(photo_path, caption=""):
         else:
             print(f"❌ 发送失败：{response.text}")
 
-# === 给用户回复文字消息 ===
+# ========== 发送纯文本消息 ==========
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
     data = {"chat_id": chat_id, "text": text}
     response = requests.post(url, data=data)
-    print(f"📤 回复消息状态码：{response.status_code}")
+    print(f"📤 回复状态：{response.status_code}")
 
-# === 股票分析任务 ===
+# ========== 股票分析并发图 ==========
 def generate_stock_report(stock_code):
-    print(f"📥 正在抓取 {stock_code} 的数据...")
-    df = yf.download(stock_code, period="30d", interval="1d", auto_adjust=False)
+    print(f"📊 抓取 {stock_code} 的数据...")
+    df = yf.download(stock_code, period="5d", interval="1d", auto_adjust=False)
     if df.empty:
-        print(f"⚠️ 无法获取 {stock_code} 的数据")
+        print(f"⚠️ 无数据：{stock_code}")
         return
 
     df["MA5"] = df["Close"].rolling(window=5).mean()
     df["MA20"] = df["Close"].rolling(window=20).mean()
+    latest = df.iloc[[-1]]
+
+    try:
+        open_price = float(latest["Open"].iloc[0])
+        close_price = float(latest["Close"].iloc[0])
+    except:
+        open_price = close_price = 0.0
+
+    change = close_price - open_price
+    pct_change = (change / open_price) * 100 if open_price else 0.0
+
+    if change > 0:
+        trend_icon = "📈 上涨"
+        reason = "市场乐观或利好消息。"
+    elif change < 0:
+        trend_icon = "📉 下跌"
+        reason = "市场回调或情绪偏空。"
+    else:
+        trend_icon = "➖ 无涨跌"
+        reason = "股价稳定，无波动。"
+
+    if len(df) >= 2:
+        yesterday = df.iloc[[-2]]
+        yesterday_MA5 = float(yesterday["MA5"].iloc[0]) if pd.notna(yesterday["MA5"].iloc[0]) else 0.0
+        yesterday_MA20 = float(yesterday["MA20"].iloc[0]) if pd.notna(yesterday["MA20"].iloc[0]) else 0.0
+    else:
+        yesterday_MA5 = yesterday_MA20 = 0.0
+
+    today_MA5 = float(latest["MA5"].iloc[0]) if pd.notna(latest["MA5"].iloc[0]) else 0.0
+    today_MA20 = float(latest["MA20"].iloc[0]) if pd.notna(latest["MA20"].iloc[0]) else 0.0
+
+    trend_advice = ""
+    if close_price > today_MA20:
+        trend_advice = "⚠️ 明日关注：股价已上穿 MA20，有动能。"
+    elif today_MA5 > today_MA20 and yesterday_MA5 < yesterday_MA20:
+        trend_advice = "⚠️ 金叉信号：MA5 上穿 MA20。"
+    elif today_MA5 < today_MA20 and yesterday_MA5 > yesterday_MA20:
+        trend_advice = "⚠️ 死叉警告：MA5 下穿 MA20。"
+
+    try:
+        ticker = yf.Ticker(stock_code)
+        news_items = ticker.news[:3]
+        if news_items:
+            news_text = "\n📰 新闻："
+            for news in news_items:
+                title = news.get("title", "无标题")
+                source = news.get("publisher", "来源未知")
+                news_text += f"\n• [{source}] {title}"
+        else:
+            news_text = "\n📰 暂无相关新闻"
+    except:
+        news_text = "\n📰 新闻获取失败"
+
+    caption = (
+        f"📊 {stock_code} 股票走势\n"
+        f"开市价：RM {open_price:.2f}\n"
+        f"收市价：RM {close_price:.2f}\n"
+        f"涨跌：{trend_icon} RM {change:.2f}（{pct_change:.2f}%）\n"
+        f"{reason}\n"
+        f"{trend_advice}\n"
+        f"{news_text}"
+    )
+
+    # 生成图表
+    hist_df = yf.download(stock_code, period="60d", interval="1d", auto_adjust=False)
+    hist_df["MA5"] = hist_df["Close"].rolling(window=5).mean()
+    hist_df["MA20"] = hist_df["Close"].rolling(window=20).mean()
 
     os.makedirs("charts", exist_ok=True)
-    image_path = f"charts/{stock_code.replace('.KL','')}.png"
+    filename = f"charts/{stock_code.replace('.KL', '')}.png"
 
     plt.figure(figsize=(10, 5))
-    plt.plot(df["Close"], label="收盘价", color="black")
-    plt.plot(df["MA5"], label="MA5", color="blue")
-    plt.plot(df["MA20"], label="MA20", color="red")
-    plt.title(f"{stock_code} - 30日走势图")
-    plt.xlabel("日期")
-    plt.ylabel("价格 (RM)")
+    plt.plot(hist_df["Close"], label="Close", color="black")
+    plt.plot(hist_df["MA5"], label="MA5", color="blue")
+    plt.plot(hist_df["MA20"], label="MA20", color="red")
+    plt.title(f"{stock_code} - 60日走势图")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(image_path)
+    plt.savefig(filename)
     plt.close()
 
-    try:
-        latest = df.iloc[-1]
-        open_price = float(latest["Open"])
-        close_price = float(latest["Close"])
-        change = close_price - open_price
-        pct = (change / open_price) * 100 if open_price != 0 else 0
-    except Exception as e:
-        print(f"❌ 数据处理出错: {e}")
-        return
+    send_telegram_photo(filename, caption)
 
-    trend = "📈 上涨" if change > 0 else "📉 下跌" if change < 0 else "➖ 持平"
-    caption = (
-        f"📊 股票：{stock_code}\n"
-        f"开市：RM {open_price:.2f}\n"
-        f"收市：RM {close_price:.2f}\n"
-        f"涨跌：{trend} RM {change:.2f}（{pct:.2f}%）"
-    )
-
-    send_telegram_photo(image_path, caption)
-
-def run_all_stocks():
+# ========== 多股票执行 ==========
+def run_all():
     stock_list = ["5255.KL", "0209.KL"]
-    for stock in stock_list:
-        generate_stock_report(stock)
+    for code in stock_list:
+        generate_stock_report(code)
 
-# === 首页 ===
+# ========== Flask 路由 ==========
 @app.route("/")
-def index():
+def home():
     return "✅ MyStock Bot 正在运行"
 
-# === 手动运行任务 ===
 @app.route("/run")
-def run_job():
-    threading.Thread(target=run_all_stocks).start()
-    return "📊 股票分析任务已启动"
+def run_task():
+    threading.Thread(target=run_all).start()
+    return "📈 股票分析任务启动中"
 
-# ✅ Telegram Webhook 路由（自动回复）
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         data = request.get_json(force=True)
-        print("📩 收到 Telegram 消息：", data)
-
+        print("📩 收到消息：", data)
         if "message" in data:
             chat_id = data["message"]["chat"]["id"]
             text = data["message"].get("text", "")
             reply = f"✅ 你发送了：{text}"
             send_message(chat_id, reply)
-
         return "OK"
     except Exception as e:
-        print("❌ Webhook 处理出错：", e)
+        print("❌ Webhook 错误：", e)
         return "Internal Server Error", 500
 
-# === 启动服务器 ===
+# ========== 启动 Flask ==========
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
