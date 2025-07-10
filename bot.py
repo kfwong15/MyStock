@@ -1,14 +1,19 @@
+import os
 import yfinance as yf
 import matplotlib.pyplot as plt
-import requests
-import os
 import pandas as pd
+import requests
+from flask import Flask
+import threading
 
 # === Telegram Bot 配置 ===
 TG_BOT_TOKEN = "7976682927:AAHVwjcfg4fzP9Wu6wv0ue2LdPSzrmE6oE0"
-TG_CHAT_ID = "-1002721174982"  # Supergroup ID
+TG_CHAT_ID = "-1002721174982"
 
-# === 发送图片到 Telegram ===
+# === Flask 应用初始化 ===
+app = Flask(__name__)
+
+# === 发送图片到 Telegram 群组 ===
 def send_telegram_photo(photo_path, caption=""):
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
     with open(photo_path, "rb") as photo:
@@ -35,7 +40,7 @@ def generate_stock_report(stock_code):
     os.makedirs("charts", exist_ok=True)
     image_path = f"charts/{stock_code.replace('.KL','')}.png"
 
-    # === 绘图 ===
+    # 绘图
     plt.figure(figsize=(10, 5))
     plt.plot(df["Close"], label="收盘价", color="black")
     plt.plot(df["MA5"], label="MA5", color="blue")
@@ -49,7 +54,7 @@ def generate_stock_report(stock_code):
     plt.savefig(image_path)
     plt.close()
 
-    # === 提取价格并计算涨跌 ===
+    # 提取价格并生成说明
     try:
         latest = df.iloc[-1]
         open_price = float(latest["Open"])
@@ -60,7 +65,6 @@ def generate_stock_report(stock_code):
         print(f"❌ 数据处理出错: {e}")
         return
 
-    # === 生成说明文字 ===
     trend = "📈 上涨" if change > 0 else "📉 下跌" if change < 0 else "➖ 持平"
     caption = (
         f"📊 股票：{stock_code}\n"
@@ -69,11 +73,25 @@ def generate_stock_report(stock_code):
         f"涨跌：{trend} RM {change:.2f}（{pct:.2f}%）"
     )
 
-    # === 发送图表和说明 ===
     send_telegram_photo(image_path, caption)
 
-# === 主程序入口 ===
+# === 后台运行股票分析任务 ===
+def run_all_stocks():
+    stock_list = ["5255.KL", "0209.KL"]
+    for stock in stock_list:
+        generate_stock_report(stock)
+
+# === 路由 ===
+@app.route("/")
+def index():
+    return "✅ MyStock Bot 正在运行。访问 /run 触发分析任务"
+
+@app.route("/run")
+def run_job():
+    threading.Thread(target=run_all_stocks).start()
+    return "📊 股票分析任务已启动，图表将发送至 Telegram"
+
+# === 启动服务器 ===
 if __name__ == "__main__":
-    stock_list = ["5255.KL", "0209.KL"]  # 你的股票列表
-    for code in stock_list:
-        generate_stock_report(code)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
