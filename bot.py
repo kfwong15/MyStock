@@ -10,7 +10,7 @@ import threading
 TG_BOT_TOKEN = "7976682927:AAHVwjcfg4fzP9Wu6wv0ue2LdPSzrmE6oE0"
 TG_CHAT_ID = "-1002721174982"
 
-# === Flask 应用初始化 ===
+# === Flask 初始化 ===
 app = Flask(__name__)
 
 # === 发送图片到 Telegram 群组 ===
@@ -25,7 +25,14 @@ def send_telegram_photo(photo_path, caption=""):
         else:
             print(f"❌ 发送失败：{response.text}")
 
-# === 抓取股票数据并生成图表 ===
+# === 给用户回复文字消息 ===
+def send_message(chat_id, text):
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+    data = {"chat_id": chat_id, "text": text}
+    response = requests.post(url, data=data)
+    print(f"📤 回复消息状态码：{response.status_code}")
+
+# === 股票分析任务 ===
 def generate_stock_report(stock_code):
     print(f"📥 正在抓取 {stock_code} 的数据...")
     df = yf.download(stock_code, period="30d", interval="1d", auto_adjust=False)
@@ -72,28 +79,39 @@ def generate_stock_report(stock_code):
 
     send_telegram_photo(image_path, caption)
 
-# === 多个股票执行任务 ===
 def run_all_stocks():
     stock_list = ["5255.KL", "0209.KL"]
     for stock in stock_list:
         generate_stock_report(stock)
 
-# === 网页路由 ===
+# === 首页 ===
 @app.route("/")
 def index():
-    return "✅ MyStock Bot 正在运行。访问 /run 可手动触发分析任务。"
+    return "✅ MyStock Bot 正在运行"
 
+# === 手动运行任务 ===
 @app.route("/run")
 def run_job():
     threading.Thread(target=run_all_stocks).start()
-    return "📊 股票分析任务已启动，结果将通过 Telegram 发送"
+    return "📊 股票分析任务已启动"
 
-# ✅ webhook 路由（用于 Telegram 推送消息）
+# ✅ Telegram Webhook 路由（自动回复）
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json()
-    print("📩 收到 Telegram 消息：", data)
-    return "OK"
+    try:
+        data = request.get_json(force=True)
+        print("📩 收到 Telegram 消息：", data)
+
+        if "message" in data:
+            chat_id = data["message"]["chat"]["id"]
+            text = data["message"].get("text", "")
+            reply = f"✅ 你发送了：{text}"
+            send_message(chat_id, reply)
+
+        return "OK"
+    except Exception as e:
+        print("❌ Webhook 处理出错：", e)
+        return "Internal Server Error", 500
 
 # === 启动服务器 ===
 if __name__ == "__main__":
