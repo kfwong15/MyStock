@@ -1,8 +1,12 @@
+# 股票分析依赖
 yfinance
 matplotlib
 pandas
-requests
 numpy
 textblob
-python-dotenv
 pytz
+
+# Telegram Bot 依赖
+flask
+requests
+python-dotenv
