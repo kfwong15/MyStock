@@ -1,5 +1,8 @@
-pandas
+yfinance
 matplotlib
+pandas
 requests
 numpy
+textblob
+python-dotenv
 pytz
